@@ -27,9 +27,15 @@ if (!ccsBin) {
 }
 
 // 创建无窗口启动的 VBScript 包装器
+// 先用 netstat 找占用 7899 端口的 PID 并杀掉，再启动新进程
 const vbsDir = path.dirname(vbsPath);
 if (!require('fs').existsSync(vbsDir)) require('fs').mkdirSync(vbsDir, { recursive: true });
-const vbsContent = `Set ws = CreateObject("WScript.Shell")\r\nws.Run "${ccsBin.replace(/\\/g, '\\\\')} web 7899", 0, False\r\n`;
+const vbsContent = [
+  `Set ws = CreateObject("WScript.Shell")`,
+  `Set oExec = ws.Exec("cmd /c for /f ""tokens=5"" %a in ('netstat -ano ^| findstr :7899 ^| findstr LISTENING') do taskkill /F /PID %a")`,
+  `oExec.StdOut.ReadAll`,
+  `ws.Run "${ccsBin.replace(/\\/g, '\\\\')} web 7899", 0, False`,
+].join('\r\n') + '\r\n';
 require('fs').writeFileSync(vbsPath, vbsContent, 'utf8');
 
 // 快捷方式指向 wscript.exe 运行 VBScript，完全无窗口
