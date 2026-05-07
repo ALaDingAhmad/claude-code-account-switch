@@ -1,6 +1,7 @@
 node_modules/
 *.log
 .ccs/
+.claude/
 generated-images/
 *.tmp
 claude-code-account-switcher-spec-final.md
