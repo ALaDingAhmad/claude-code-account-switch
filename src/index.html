@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCS - Claude Code Account Switcher</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3d;
+    --accent: #d97706;
+    --accent-dim: #92400e;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --active-bg: #1c2535;
+    --active-border: #3b82f6;
+    --danger: #ef4444;
+    --ok: #22c55e;
+  }
+  body { background: var(--bg); color: var(--text); font: 16px/1.6 "SF Mono","Fira Code",monospace; min-height: 100vh; padding: 32px 16px; }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: .02em; color: var(--accent); margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+  .section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 12px; }
+  .active-card {
+    background: var(--active-bg); border: 1px solid var(--active-border);
+    border-radius: 10px; padding: 20px 24px; max-width: 780px; margin-bottom: 32px;
+  }
+  .active-card .name { font-size: 19px; font-weight: 700; color: #fff; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .badge { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 99px; text-transform: uppercase; letter-spacing: .06em; }
+  .badge-active { background: #1e3a5f; color: #60a5fa; }
+  .badge-pro { background: #3b1f0a; color: var(--accent); }
+  .badge-expired { background: #2d1515; color: var(--danger); }
+  .meta-grid { display: grid; grid-template-columns: 120px 1fr; gap: 6px 14px; font-size: 14px; }
+  .meta-grid .label { color: var(--muted); }
+  .meta-grid .value { color: var(--text); word-break: break-all; }
+  .none-card { color: var(--muted); font-size: 15px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; max-width: 780px; margin-bottom: 32px; }
+  .accounts { display: grid; gap: 12px; max-width: 780px; }
+  .account-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 22px;
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    transition: border-color .15s;
+  }
+  .account-card:hover { border-color: #3a3d55; }
+  .account-card.is-active { border-color: var(--active-border); background: var(--active-bg); }
+  .account-info { flex: 1; min-width: 0; }
+  .account-info .name { font-weight: 600; font-size: 16px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .account-info .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 10px; }
+  .account-info .meta span { white-space: nowrap; }
+  .btn {
+    border: none; border-radius: 7px; padding: 9px 20px; font: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; transition: opacity .1s, background .1s;
+  }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-switch { background: #d97706; color: #000; }
+  .btn-switch:hover:not(:disabled) { background: #f59e0b; }
+  .btn-active { background: #1e3a5f; color: #60a5fa; cursor: default; }
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; background: #1e293b; border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 18px; font-size: 15px; max-width: 380px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4); opacity: 0; transform: translateY(8px);
+    transition: opacity .2s, transform .2s; pointer-events: none; z-index: 999;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok { border-color: var(--ok); color: var(--ok); }
+  .toast.err { border-color: var(--danger); color: var(--danger); }
+  .poll-indicator { position: fixed; top: 16px; right: 20px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>CCS</h1>
+<p class="subtitle">Claude Code Account Switcher</p>
+
+<div class="section-title">Active Account</div>
+<div id="active-section"></div>
+
+<div class="section-title">Imported Accounts</div>
+<div id="accounts-section" class="accounts"></div>
+
+<div class="toast" id="toast"></div>
+<div class="poll-indicator" id="poll-indicator"></div>
+
+<script>
+let switching = false;
+
+function expiredBadge(expiresAt) {
+  if (!expiresAt) return '';
+  return Date.now() > expiresAt ? '<span class="badge badge-expired">expired</span>' : '';
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s || '');
+  return d.innerHTML;
+}
+
+function render(data) {
+  const { activeAccount, accounts } = data;
+
+  const activeEl = document.getElementById('active-section');
+  if (activeAccount && accounts[activeAccount]) {
+    const a = accounts[activeAccount];
+    activeEl.innerHTML =
+      '<div class="active-card">' +
+        '<div class="name">' + esc(activeAccount) +
+          '<span class="badge badge-active">active</span>' +
+          (a.subscriptionType ? '<span class="badge badge-pro">' + esc(a.subscriptionType) + '</span>' : '') +
+          expiredBadge(a.expiresAt) +
+        '</div>' +
+        '<div class="meta-grid">' +
+          (a.displayName || a.emailAddress
+            ? '<span class="label">Identity</span><span class="value">' + esc((a.displayName || '') + (a.emailAddress ? ' <' + a.emailAddress + '>' : '')) + '</span>'
+            : '') +
+          (a.organizationName ? '<span class="label">Organization</span><span class="value">' + esc(a.organizationName) + '</span>' : '') +
+          '<span class="label">Token</span><span class="value">' + esc(a.accessTokenMasked || 'N/A') + '</span>' +
+          '<span class="label">Expires</span><span class="value">' + esc(a.expiresIn || 'unknown') + '</span>' +
+        '</div>' +
+      '</div>';
+  } else {
+    activeEl.innerHTML = '<div class="none-card">No active account. Import an account with <code>ccs import &lt;name&gt;</code></div>';
+  }
+
+  const listEl = document.getElementById('accounts-section');
+  const names = Object.keys(accounts);
+  if (names.length === 0) {
+    listEl.innerHTML = '<div class="none-card">No imported accounts.</div>';
+    return;
+  }
+  listEl.innerHTML = names.map(name => {
+    const a = accounts[name];
+    const isActive = name === activeAccount;
+    return '<div class="account-card' + (isActive ? ' is-active' : '') + '">' +
+      '<div class="account-info">' +
+        '<div class="name">' + esc(name) +
+          (isActive ? '<span class="badge badge-active">active</span>' : '') +
+          (a.subscriptionType ? '<span class="badge badge-pro">' + esc(a.subscriptionType) + '</span>' : '') +
+          expiredBadge(a.expiresAt) +
+        '</div>' +
+        '<div class="meta">' +
+          (a.emailAddress ? '<span>' + esc(a.emailAddress) + '</span>' : '') +
+          (a.organizationName ? '<span>' + esc(a.organizationName) + '</span>' : '') +
+          '<span>' + esc(a.expiresIn || 'unknown') + '</span>' +
+        '</div>' +
+      '</div>' +
+      (isActive
+        ? '<button class="btn btn-active" disabled>Current</button>'
+        : '<button class="btn btn-switch" data-name="' + esc(name) + '">Switch</button>') +
+    '</div>';
+  }).join('');
+
+  document.querySelectorAll('.btn-switch').forEach(btn => {
+    btn.addEventListener('click', () => doSwitch(btn.dataset.name));
+  });
+}
+
+async function load(silent) {
+  try {
+    const r = await fetch('/api/status');
+    const data = await r.json();
+    if (data.ok) render(data);
+    if (!silent) document.getElementById('poll-indicator').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch { /* ignore */ }
+}
+
+async function doSwitch(name) {
+  if (switching) return;
+  switching = true;
+  document.querySelectorAll('.btn-switch').forEach(b => b.disabled = true);
+  showToast('Switching to "' + name + '"...', '');
+
+  try {
+    const r = await fetch('/api/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    await load(true);
+    showToast(data.message || 'Switched to "' + name + '"', 'ok');
+  } catch (e) {
+    showToast(e.message || 'Switch failed', 'err');
+  } finally {
+    switching = false;
+    document.querySelectorAll('.btn-switch').forEach(b => b.disabled = false);
+  }
+}
+
+let toastTimer;
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(toastTimer);
+  if (type) toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+load();
+setInterval(() => load(), 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "claude-code-account-switch",
+  "version": "2.0.0",
+  "description": "Claude Code account switcher for Windows using credential snapshot restore",
+  "bin": {
+    "ccs": "bin/ccs.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "claude",
+    "account",
+    "switch",
+    "windows",
+    "credentials"
+  ],
+  "license": "MIT",
+  "author": "baiqiang",
+  "files": [
+    "bin/",
+    "src/"
+  ]
+}
