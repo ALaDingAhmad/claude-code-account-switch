@@ -221,6 +221,44 @@ class AccountStore {
     atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
   }
 
+  editAccount({ oldName, newName, type, authToken, baseUrl, emailAddress, displayName, organizationName }) {
+    const on = sanitizeName(oldName);
+    const nn = sanitizeName(newName);
+    const acct = this._config.accounts[on];
+    if (!acct) throw new Error(`Unknown account "${on}"`);
+    if (nn !== on && this._config.accounts[nn]) throw new Error(`Account "${nn}" already exists`);
+
+    if (type === 'apikey') {
+      if (!authToken) throw new Error('authToken is required');
+      acct.authToken = authToken;
+      acct.authTokenMasked = maskToken(authToken);
+      acct.baseUrl = baseUrl || null;
+      // 如果是当前激活账号，立即写入 settings.json
+      if (this._config.activeAccount === on) this._switchApiKey(on, acct);
+    } else {
+      if (emailAddress !== undefined) acct.emailAddress = emailAddress;
+      if (displayName !== undefined) acct.displayName = displayName;
+      if (organizationName !== undefined) acct.organizationName = organizationName;
+    }
+    acct.updatedAt = new Date().toISOString();
+
+    // 改名
+    if (nn !== on) {
+      this._config.accounts[nn] = { ...acct, name: nn };
+      delete this._config.accounts[on];
+      if (this._config.activeAccount === on) this._config.activeAccount = nn;
+      // 重命名快照文件
+      const oldSnap = credentialsSnapshotPath(on);
+      const newSnap = credentialsSnapshotPath(nn);
+      const oldState = stateSnapshotPath(on);
+      const newState = stateSnapshotPath(nn);
+      try { if (fileExists(oldSnap)) require('fs').renameSync(oldSnap, newSnap); } catch { /* ignore */ }
+      try { if (fileExists(oldState)) require('fs').renameSync(oldState, newState); } catch { /* ignore */ }
+    }
+
+    this._save();
+  }
+
   removeAccount(name) {
     const n = sanitizeName(name);
     if (!this._config.accounts[n]) throw new Error(`Unknown account "${n}"`);

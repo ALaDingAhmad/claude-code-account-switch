@@ -142,6 +142,8 @@ body {
 .btn-accent:active:not(:disabled) { transform: translateY(0); }
 .btn-outline { background: var(--white); color: var(--accent); border: 1.5px solid var(--border-focus); }
 .btn-outline:hover:not(:disabled) { background: var(--accent-light); }
+.btn-ghost { background: var(--white); color: var(--text-dim); border: 1.5px solid var(--border); }
+.btn-ghost:hover:not(:disabled) { background: var(--bg); color: var(--text); }
 .btn-current { background: var(--blue-light); color: var(--blue); border: 1px solid rgba(59,130,246,.2); cursor: default; }
 .btn-danger { background: var(--red-light); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
 .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,.15); }
@@ -181,6 +183,26 @@ body {
 .badge-purple { background: var(--accent-light); color: var(--accent); }
 .badge-green { background: var(--green-light); color: var(--green); }
 .badge-red { background: var(--red-light); color: var(--red); }
+
+/* Edit modal */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.3);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+.modal-backdrop.show { opacity: 1; pointer-events: auto; }
+.modal {
+  background: var(--white); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); width: 480px; max-width: calc(100vw - 32px);
+  padding: 28px; transform: translateY(8px) scale(.98);
+  transition: transform .2s;
+}
+.modal-backdrop.show .modal { transform: none; }
+.modal-title { font-size: 16px; font-weight: 700; margin-bottom: 20px; }
+.field { margin-bottom: 14px; }
+.field-label { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
+.field .input { width: 100%; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 
 /* Empty */
 .empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }
@@ -284,6 +306,18 @@ body {
 
 </div>
 
+<!-- Edit Modal -->
+<div class="modal-backdrop" id="modal-backdrop" onclick="closeEdit(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title" id="modal-title">编辑账号</div>
+    <div id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeEdit()">取消</button>
+      <button class="btn btn-accent" id="modal-save-btn" onclick="doEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast">
   <div class="toast-dot"></div>
   <span id="toast-msg"></span>
@@ -308,6 +342,7 @@ function expiredBadge(expiresAt) {
 
 function render(data) {
   const { activeAccount, accounts } = data;
+  allAccounts = accounts;
 
   // Active
   const activeEl = document.getElementById('active-section');
@@ -371,6 +406,7 @@ function render(data) {
         (isActive
           ? '<button class="btn btn-sm btn-current" disabled>使用中</button>'
           : '<button class="btn btn-sm btn-outline switch-btn" data-name="' + esc(name) + '">切换</button>') +
+        '<button class="btn btn-sm btn-ghost edit-btn" data-name="' + esc(name) + '">编辑</button>' +
         '<button class="btn btn-sm btn-danger remove-btn" data-name="' + esc(name) + '">删除</button>' +
       '</div>' +
     '</div>';
@@ -381,6 +417,9 @@ function render(data) {
   });
   document.querySelectorAll('.remove-btn').forEach(btn => {
     btn.addEventListener('click', () => doRemove(btn.dataset.name));
+  });
+  document.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => openEdit(btn.dataset.name));
   });
 }
 
@@ -495,6 +534,69 @@ async function doImportApiKey() {
     importing = false;
     btn.disabled = false;
     btn.innerHTML = '导入';
+  }
+}
+
+let editingName = null;
+let allAccounts = {};
+
+function openEdit(name) {
+  const a = allAccounts[name];
+  if (!a) return;
+  editingName = name;
+  document.getElementById('modal-title').textContent = '编辑账号：' + name;
+  const isApiKey = a.type === 'apikey';
+  document.getElementById('modal-body').innerHTML = isApiKey
+    ? '<div class="field"><div class="field-label">账号名称</div><input class="input" id="edit-name" value="' + esc(name) + '" /></div>' +
+      '<div class="field"><div class="field-label">ANTHROPIC_AUTH_TOKEN</div><input class="input" id="edit-token" value="' + esc(a.authToken || '') + '" /></div>' +
+      '<div class="field"><div class="field-label">ANTHROPIC_BASE_URL（可选）</div><input class="input" id="edit-url" value="' + esc(a.baseUrl || '') + '" placeholder="留空则不设置" /></div>'
+    : '<div class="field"><div class="field-label">账号名称</div><input class="input" id="edit-name" value="' + esc(name) + '" /></div>' +
+      '<div class="field"><div class="field-label">邮箱</div><input class="input" id="edit-email" value="' + esc(a.emailAddress || '') + '" /></div>' +
+      '<div class="field"><div class="field-label">显示名称</div><input class="input" id="edit-displayname" value="' + esc(a.displayName || '') + '" /></div>' +
+      '<div class="field"><div class="field-label">组织</div><input class="input" id="edit-org" value="' + esc(a.organizationName || '') + '" /></div>';
+  document.getElementById('modal-backdrop').classList.add('show');
+}
+
+function closeEdit(e) {
+  if (e && e.target !== document.getElementById('modal-backdrop')) return;
+  document.getElementById('modal-backdrop').classList.remove('show');
+  editingName = null;
+}
+
+async function doEdit() {
+  if (!editingName) return;
+  const a = allAccounts[editingName];
+  const isApiKey = a.type === 'apikey';
+  const newName = document.getElementById('edit-name').value.trim();
+  if (!newName) { showToast('账号名称不能为空', 'err'); return; }
+
+  const payload = { oldName: editingName, newName, type: a.type };
+  if (isApiKey) {
+    payload.authToken = document.getElementById('edit-token').value.trim();
+    payload.baseUrl = document.getElementById('edit-url').value.trim() || null;
+    if (!payload.authToken) { showToast('Token 不能为空', 'err'); return; }
+  } else {
+    payload.emailAddress = document.getElementById('edit-email').value.trim() || null;
+    payload.displayName = document.getElementById('edit-displayname').value.trim() || null;
+    payload.organizationName = document.getElementById('edit-org').value.trim() || null;
+  }
+
+  const btn = document.getElementById('modal-save-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const r = await fetch('/api/edit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    document.getElementById('modal-backdrop').classList.remove('show');
+    await load(true);
+    showToast('已保存', 'ok');
+  } catch (e) {
+    showToast(e.message || '保存失败', 'err');
+  } finally {
+    btn.disabled = false; btn.innerHTML = '保存';
   }
 }
 
