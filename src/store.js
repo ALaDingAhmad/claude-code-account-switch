@@ -3,6 +3,7 @@ const {
   CONFIG_PATH,
   CREDENTIALS_PATH,
   CLAUDE_STATE_PATH,
+  CLAUDE_SETTINGS_PATH,
   ensureCcsDirs,
   atomicWriteJson,
   readJson,
@@ -39,8 +40,10 @@ class AccountStore {
     atomicWriteJson(CONFIG_PATH, this._config);
   }
 
-  // 从 config.accounts 条目构造对外使用的账号对象（含派生字段）
   _entry(name, raw) {
+    if (raw.type === 'apikey') {
+      return { ...raw, name: raw.name || name };
+    }
     return {
       ...raw,
       name: raw.name || name,
@@ -50,24 +53,16 @@ class AccountStore {
     };
   }
 
-  _readLiveCredentials() {
-    if (!fileExists(CREDENTIALS_PATH)) {
-      throw new Error(`Credentials file not found: ${CREDENTIALS_PATH}`);
-    }
-    const json = readJson(CREDENTIALS_PATH);
-    const oauth = extractOauth(json);
-    if (!oauth || !oauth.accessToken || !oauth.refreshToken) {
-      throw new Error(`Invalid credentials file: ${CREDENTIALS_PATH}`);
-    }
-    return json;
-  }
-
   _readLiveState() {
     if (!fileExists(CLAUDE_STATE_PATH)) return {};
     return readJson(CLAUDE_STATE_PATH);
   }
 
-  // 只把 userID / oauthAccount 写回 ~/.claude.json，其余字段保持不动
+  _readSettings() {
+    if (!fileExists(CLAUDE_SETTINGS_PATH)) return {};
+    return readJson(CLAUDE_SETTINGS_PATH);
+  }
+
   _restoreStateFields(snapshot) {
     const live = this._readLiveState();
     const next = { ...live };
@@ -82,6 +77,12 @@ class AccountStore {
 
   // ── 公开 API ──────────────────────────────────────────────────────────────
 
+  getLiveEmail() {
+    const state = this._readLiveState();
+    return state.oauthAccount?.emailAddress || null;
+  }
+
+  // 导入 OAuth 账号
   importAccount(name, sourcePath = CREDENTIALS_PATH) {
     const n = sanitizeName(name);
     const sourceJson = readJson(sourcePath);
@@ -94,7 +95,6 @@ class AccountStore {
     const liveOauth = liveState.oauthAccount || {};
     const prev = this._config.accounts[n] || {};
 
-    // 保存凭证快照和状态快照
     atomicWriteJson(credentialsSnapshotPath(n), sourceJson);
     atomicWriteJson(stateSnapshotPath(n), {
       userID: liveState.userID || null,
@@ -102,6 +102,7 @@ class AccountStore {
     });
 
     this._config.accounts[n] = {
+      type: 'oauth',
       name: n,
       accessTokenMasked: maskToken(oauth.accessToken),
       subscriptionType: oauth.subscriptionType || 'unknown',
@@ -121,10 +122,45 @@ class AccountStore {
     return this._entry(n, this._config.accounts[n]);
   }
 
+  // 导入 API Key 账号
+  importApiKeyAccount(name, authToken, baseUrl) {
+    const n = sanitizeName(name);
+    if (!authToken) throw new Error('authToken is required');
+
+    const prev = this._config.accounts[n] || {};
+    this._config.accounts[n] = {
+      type: 'apikey',
+      name: n,
+      authToken,
+      authTokenMasked: maskToken(authToken),
+      baseUrl: baseUrl || null,
+      importedAt: prev.importedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this._config.activeAccount = n;
+    this._config.lastSwitchedAt = new Date().toISOString();
+    this._save();
+    return this._entry(n, this._config.accounts[n]);
+  }
+
   switchAccount(name) {
     const n = sanitizeName(name);
-    if (!this._config.accounts[n]) throw new Error(`Unknown account "${n}"`);
+    const acct = this._config.accounts[n];
+    if (!acct) throw new Error(`Unknown account "${n}"`);
 
+    if (acct.type === 'apikey') {
+      this._switchApiKey(n, acct);
+    } else {
+      this._switchOauth(n, acct);
+    }
+
+    this._config.activeAccount = n;
+    this._config.lastSwitchedAt = new Date().toISOString();
+    this._save();
+    return this._entry(n, this._config.accounts[n]);
+  }
+
+  _switchOauth(n, prev) {
     const snapPath = credentialsSnapshotPath(n);
     if (!fileExists(snapPath)) throw new Error(`Snapshot not found for "${n}"`);
     const snapshot = readJson(snapPath);
@@ -139,9 +175,12 @@ class AccountStore {
     atomicWriteJson(CREDENTIALS_PATH, snapshot);
     if (stateSnap) this._restoreStateFields(stateSnap);
 
-    const prev = this._config.accounts[n];
+    // 切换到 oauth 时清除 settings.json 里的 apikey env
+    this._clearApikeyEnv();
+
     this._config.accounts[n] = {
       ...prev,
+      type: 'oauth',
       accessTokenMasked: maskToken(oauth.accessToken),
       subscriptionType: oauth.subscriptionType || prev.subscriptionType || 'unknown',
       scopes: Array.isArray(oauth.scopes) ? oauth.scopes : prev.scopes || [],
@@ -153,10 +192,32 @@ class AccountStore {
       userID: stateSnap?.userID || prev.userID || null,
       updatedAt: new Date().toISOString(),
     };
-    this._config.activeAccount = n;
-    this._config.lastSwitchedAt = new Date().toISOString();
-    this._save();
-    return this._entry(n, this._config.accounts[n]);
+  }
+
+  _switchApiKey(n, prev) {
+    const settings = this._readSettings();
+    const env = settings.env || {};
+    env.ANTHROPIC_AUTH_TOKEN = prev.authToken;
+    if (prev.baseUrl) {
+      env.ANTHROPIC_BASE_URL = prev.baseUrl;
+    } else {
+      delete env.ANTHROPIC_BASE_URL;
+    }
+    atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
+
+    this._config.accounts[n] = {
+      ...prev,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  _clearApikeyEnv() {
+    if (!fileExists(CLAUDE_SETTINGS_PATH)) return;
+    const settings = this._readSettings();
+    const env = settings.env || {};
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_BASE_URL;
+    atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
   }
 
   removeAccount(name) {
@@ -191,10 +252,11 @@ class AccountStore {
   listAccounts() {
     const result = {};
     for (const [n, raw] of Object.entries(this._config.accounts)) {
+      const entry = this._entry(n, raw);
       result[n] = {
-        ...this._entry(n, raw),
+        ...entry,
         isActive: n === this._config.activeAccount,
-        expiresIn: formatExpiry(raw.expiresAt),
+        expiresIn: raw.type === 'apikey' ? null : formatExpiry(raw.expiresAt),
       };
     }
     return result;
@@ -210,15 +272,22 @@ class AccountStore {
       credentialsPath: CREDENTIALS_PATH,
       statePath: CLAUDE_STATE_PATH,
       active: raw
-        ? {
-            subscriptionType: raw.subscriptionType,
-            expiresAt: raw.expiresAt,
-            expiresIn: formatExpiry(raw.expiresAt),
-            accessTokenMasked: raw.accessTokenMasked || maskToken(raw.accessToken),
-            emailAddress: raw.emailAddress || null,
-            displayName: raw.displayName || null,
-            organizationName: raw.organizationName || null,
-          }
+        ? raw.type === 'apikey'
+          ? {
+              type: 'apikey',
+              authTokenMasked: raw.authTokenMasked,
+              baseUrl: raw.baseUrl || null,
+            }
+          : {
+              type: 'oauth',
+              subscriptionType: raw.subscriptionType,
+              expiresAt: raw.expiresAt,
+              expiresIn: formatExpiry(raw.expiresAt),
+              accessTokenMasked: raw.accessTokenMasked || maskToken(raw.accessToken),
+              emailAddress: raw.emailAddress || null,
+              displayName: raw.displayName || null,
+              organizationName: raw.organizationName || null,
+            }
         : null,
     };
   }

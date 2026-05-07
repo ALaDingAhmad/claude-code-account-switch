@@ -10,6 +10,8 @@ const CREDENTIALS_PATH =
   process.env.CLAUDE_CREDENTIALS_PATH || path.join(CLAUDE_DIR, '.credentials.json');
 const CLAUDE_STATE_PATH =
   process.env.CLAUDE_STATE_PATH || path.join(HOME, '.claude.json');
+const CLAUDE_SETTINGS_PATH =
+  process.env.CLAUDE_SETTINGS_PATH || path.join(CLAUDE_DIR, 'settings.json');
 
 const CCS_DIR = process.env.CCS_HOME || path.join(HOME, '.ccs');
 const CONFIG_PATH = path.join(CCS_DIR, 'config.json');
@@ -60,8 +62,8 @@ function fileExists(filePath) {
 function sanitizeName(name) {
   const s = String(name || '').trim();
   if (!s) throw new Error('Account name is required');
-  if (!/^[a-zA-Z0-9._-]+$/.test(s)) {
-    throw new Error('Account name may only contain letters, numbers, dot, underscore, and hyphen');
+  if (!/^[a-zA-Z0-9.@_-]+$/.test(s)) {
+    throw new Error('Account name may only contain letters, numbers, dot, @, underscore, and hyphen');
   }
   return s;
 }
@@ -143,6 +145,7 @@ module.exports = {
   CLAUDE_DIR,
   CREDENTIALS_PATH,
   CLAUDE_STATE_PATH,
+  CLAUDE_SETTINGS_PATH,
   CCS_DIR,
   CONFIG_PATH,
   ACCOUNTS_DIR,
