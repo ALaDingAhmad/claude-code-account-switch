@@ -137,6 +137,7 @@ class AccountStore {
       importedAt: prev.importedAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    this._switchApiKey(n, this._config.accounts[n]);
     this._config.activeAccount = n;
     this._config.lastSwitchedAt = new Date().toISOString();
     this._save();
