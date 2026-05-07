@@ -1,6 +1,6 @@
 # CCS - Claude Code Account Switcher
 
-Windows CLI 工具，通过备份和还原 `~/.claude/.credentials.json` 及 `~/.claude.json` 中的账号字段，实现 Claude Code 多账号一键切换。
+Windows CLI 工具，通过备份和还原 `~/.claude/.credentials.json` 及 `~/.claude.json` 中的账号字段，实现 Claude Code 多账号一键切换。支持命令行操作和 Web UI 两种方式。
 
 不代理请求，不切换 profile 目录，不影响 `.claude/sessions`、`history.jsonl` 和项目状态。
 
@@ -59,8 +59,19 @@ ccs logout                同 clear-current
 ccs status                显示当前状态
 ccs accounts              列出所有已导入账号
 ccs doctor                检查环境和配置
+ccs web [port]            启动 Web UI（默认端口 7899）
 ccs -h / --help           显示帮助
 ```
+
+## Web UI
+
+```powershell
+ccs web
+# 或指定端口
+ccs web 8080
+```
+
+启动后自动打开浏览器，访问 `http://127.0.0.1:7899`，可查看所有账号状态并一键切换。页面每 30 秒自动刷新数据。
 
 ## 文件路径
 
