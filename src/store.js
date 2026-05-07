@@ -206,6 +206,16 @@ class AccountStore {
     }
     atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
 
+    // 清空 OAuth 凭证和账号状态，避免状态栏继续显示旧 OAuth 用户
+    if (fileExists(CREDENTIALS_PATH)) {
+      try { fs.unlinkSync(CREDENTIALS_PATH); } catch { atomicWriteJson(CREDENTIALS_PATH, {}); }
+    }
+    const live = this._readLiveState();
+    const next = { ...live };
+    delete next.userID;
+    delete next.oauthAccount;
+    atomicWriteJson(CLAUDE_STATE_PATH, next);
+
     this._config.accounts[n] = {
       ...prev,
       updatedAt: new Date().toISOString(),
