@@ -121,7 +121,8 @@ function startWebServer(port, openBrowser) {
     console.log('Press Ctrl+C to stop.');
     if (openBrowser) {
       try {
-        execSync(`start ${url}`, { windowsHide: true, stdio: 'ignore' });
+        const openCmd = process.platform === 'darwin' ? `open ${url}` : `start ${url}`;
+        execSync(openCmd, { windowsHide: true, stdio: 'ignore' });
       } catch { /* ignore */ }
     }
   });

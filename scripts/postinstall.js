@@ -9,6 +9,7 @@ const os = require('os');
 
 const desktop = path.join(os.homedir(), 'Desktop');
 const lnkPath = path.join(desktop, 'CCS 管理界面.lnk');
+const vbsPath = path.join(os.homedir(), '.ccs', 'launch-web.vbs');
 
 function findCcsBin() {
   try {
@@ -25,21 +26,26 @@ if (!ccsBin) {
   process.exit(0);
 }
 
-// 创建 .lnk 快捷方式，目标为 ccs web（带 --open 参数自动打开浏览器）
-// 窗口最小化运行（WindowStyle=7），保持 ccs web 进程在后台
+// 创建无窗口启动的 VBScript 包装器
+const vbsDir = path.dirname(vbsPath);
+if (!require('fs').existsSync(vbsDir)) require('fs').mkdirSync(vbsDir, { recursive: true });
+const vbsContent = `Set ws = CreateObject("WScript.Shell")\r\nws.Run "${ccsBin.replace(/\\/g, '\\\\')} web 7899", 0, False\r\n`;
+require('fs').writeFileSync(vbsPath, vbsContent, 'utf8');
+
+// 快捷方式指向 wscript.exe 运行 VBScript，完全无窗口
 const escaped = {
   lnk: lnkPath.replace(/\\/g, '\\\\'),
-  ccs: ccsBin.replace(/\\/g, '\\\\'),
+  vbs: vbsPath.replace(/\\/g, '\\\\'),
 };
 
 const psScript = [
   `$ws = New-Object -ComObject WScript.Shell`,
   `$lnk = $ws.CreateShortcut('${escaped.lnk}')`,
-  `$lnk.TargetPath = '${escaped.ccs}'`,
-  `$lnk.Arguments = 'web 7899'`,
+  `$lnk.TargetPath = 'wscript.exe'`,
+  `$lnk.Arguments = '"${escaped.vbs}"'`,
   `$lnk.WorkingDirectory = [System.Environment]::GetFolderPath('UserProfile')`,
   `$lnk.Description = 'CCS - Claude Code 账号管理界面'`,
-  `$lnk.WindowStyle = 7`,
+  `$lnk.WindowStyle = 1`,
   `$lnk.Save()`,
 ].join('; ');
 
