@@ -210,6 +210,17 @@ body {
 .toast.ok .toast-dot { background: var(--green); }
 .toast.err .toast-dot { background: var(--red); }
 
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.tab {
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  color: var(--text-muted); background: none; border: none;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  cursor: pointer; transition: all .15s; font-family: inherit;
+}
+.tab:hover { color: var(--text-dim); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 /* Spinner */
 .spin {
   display: inline-block; width: 13px; height: 13px;
@@ -234,14 +245,36 @@ body {
   <!-- Active account -->
   <div id="active-section"></div>
 
-  <!-- Import -->
+  <!-- Import Tabs -->
   <div class="section-label">导入账号</div>
   <div class="import-card">
-    <h3>导入当前登录账号</h3>
-    <p>将 Claude Code 当前登录的凭证保存为快照，之后可随时一键切换。留空则自动使用邮箱地址作为账号名。</p>
-    <div class="import-row">
-      <input class="input" id="import-name" type="text" placeholder="留空自动使用邮箱" maxlength="128" />
-      <button class="btn btn-accent" id="import-btn" onclick="doImport()">导入</button>
+    <div class="tabs">
+      <button class="tab active" id="tab-oauth" onclick="switchTab('oauth')">OAuth 登录</button>
+      <button class="tab" id="tab-apikey" onclick="switchTab('apikey')">API Key</button>
+    </div>
+
+    <div id="panel-oauth">
+      <p style="margin-bottom:16px">将 Claude Code 当前登录的凭证保存为快照，之后可随时一键切换。留空则自动使用邮箱地址作为账号名。</p>
+      <div class="import-row">
+        <input class="input" id="import-name" type="text" placeholder="留空自动使用邮箱" maxlength="128" />
+        <button class="btn btn-accent" id="import-btn" onclick="doImport()">导入</button>
+      </div>
+    </div>
+
+    <div id="panel-apikey" style="display:none">
+      <p style="margin-bottom:16px">适用于第三方中转服务，切换时自动写入 Claude Code 的 settings.json。</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="import-row">
+          <div style="flex:0 0 140px">
+            <input class="input" id="apikey-name" type="text" placeholder="账号名称" maxlength="64" />
+          </div>
+          <input class="input" id="apikey-token" type="text" placeholder="ANTHROPIC_AUTH_TOKEN" />
+        </div>
+        <div class="import-row">
+          <input class="input" id="apikey-url" type="text" placeholder="ANTHROPIC_BASE_URL（可选）" />
+          <button class="btn btn-accent" id="apikey-btn" onclick="doImportApiKey()">导入</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -280,19 +313,25 @@ function render(data) {
   const activeEl = document.getElementById('active-section');
   if (activeAccount && accounts[activeAccount]) {
     const a = accounts[activeAccount];
+    const isApiKey = a.type === 'apikey';
     activeEl.innerHTML =
       '<div class="active-hero">' +
         '<div class="active-hero-label">当前账号</div>' +
         '<div class="active-hero-name">' + esc(activeAccount) + '</div>' +
         '<div class="active-hero-badges">' +
-          (a.subscriptionType ? '<span class="hero-badge">' + esc(a.subscriptionType) + '</span>' : '') +
-          (a.expiresAt && Date.now() > a.expiresAt ? '<span class="hero-badge hero-badge-red">Token 已过期</span>' : '') +
+          (isApiKey
+            ? '<span class="hero-badge">API Key</span>'
+            : (a.subscriptionType ? '<span class="hero-badge">' + esc(a.subscriptionType) + '</span>' : '')) +
+          (!isApiKey && a.expiresAt && Date.now() > a.expiresAt ? '<span class="hero-badge hero-badge-red">Token 已过期</span>' : '') +
         '</div>' +
         '<div class="active-hero-grid">' +
-          (a.emailAddress ? '<div><div class="hero-field-label">邮箱</div><div class="hero-field-value">' + esc(a.emailAddress) + '</div></div>' : '') +
-          (a.displayName ? '<div><div class="hero-field-label">名称</div><div class="hero-field-value">' + esc(a.displayName) + '</div></div>' : '') +
-          (a.organizationName ? '<div><div class="hero-field-label">组织</div><div class="hero-field-value">' + esc(a.organizationName) + '</div></div>' : '') +
-          '<div><div class="hero-field-label">Token 到期</div><div class="hero-field-value">' + esc(a.expiresIn || 'unknown') + '</div></div>' +
+          (isApiKey
+            ? '<div><div class="hero-field-label">Auth Token</div><div class="hero-field-value">' + esc(a.authTokenMasked || 'N/A') + '</div></div>' +
+              (a.baseUrl ? '<div><div class="hero-field-label">Base URL</div><div class="hero-field-value">' + esc(a.baseUrl) + '</div></div>' : '')
+            : (a.emailAddress ? '<div><div class="hero-field-label">邮箱</div><div class="hero-field-value">' + esc(a.emailAddress) + '</div></div>' : '') +
+              (a.displayName ? '<div><div class="hero-field-label">名称</div><div class="hero-field-value">' + esc(a.displayName) + '</div></div>' : '') +
+              (a.organizationName ? '<div><div class="hero-field-label">组织</div><div class="hero-field-value">' + esc(a.organizationName) + '</div></div>' : '') +
+              '<div><div class="hero-field-label">Token 到期</div><div class="hero-field-value">' + esc(a.expiresIn || 'unknown') + '</div></div>') +
         '</div>' +
       '</div>';
   } else {
@@ -309,17 +348,23 @@ function render(data) {
   listEl.innerHTML = names.map(name => {
     const a = accounts[name];
     const isActive = name === activeAccount;
+    const isApiKey = a.type === 'apikey';
     return '<div class="account-item' + (isActive ? ' is-active' : '') + '">' +
       '<div class="avatar' + (isActive ? ' avatar-active' : '') + '">' + esc(name[0].toUpperCase()) + '</div>' +
       '<div class="acct-info">' +
         '<div class="acct-name">' + esc(name) +
           (isActive ? '<span class="badge badge-blue">使用中</span>' : '') +
-          (a.subscriptionType ? '<span class="badge badge-purple">' + esc(a.subscriptionType) + '</span>' : '') +
-          expiredBadge(a.expiresAt) +
+          (isApiKey
+            ? '<span class="badge badge-purple">API Key</span>'
+            : (a.subscriptionType ? '<span class="badge badge-purple">' + esc(a.subscriptionType) + '</span>' : '')) +
+          (!isApiKey ? expiredBadge(a.expiresAt) : '') +
         '</div>' +
         '<div class="acct-meta">' +
-          (a.emailAddress ? '<span>' + esc(a.emailAddress) + '</span>' : '') +
-          '<span>' + esc(a.expiresIn || 'unknown') + '</span>' +
+          (isApiKey
+            ? '<span>' + esc(a.authTokenMasked || '') + '</span>' +
+              (a.baseUrl ? '<span>' + esc(a.baseUrl) + '</span>' : '')
+            : (a.emailAddress ? '<span>' + esc(a.emailAddress) + '</span>' : '') +
+              '<span>' + esc(a.expiresIn || 'unknown') + '</span>') +
         '</div>' +
       '</div>' +
       '<div class="acct-actions">' +
@@ -370,6 +415,13 @@ async function doSwitch(name) {
   }
 }
 
+function switchTab(tab) {
+  document.getElementById('panel-oauth').style.display = tab === 'oauth' ? '' : 'none';
+  document.getElementById('panel-apikey').style.display = tab === 'apikey' ? '' : 'none';
+  document.getElementById('tab-oauth').classList.toggle('active', tab === 'oauth');
+  document.getElementById('tab-apikey').classList.toggle('active', tab === 'apikey');
+}
+
 async function doRemove(name) {
   if (!confirm('"' + name + '" 将被删除，确认吗？')) return;
   try {
@@ -402,6 +454,39 @@ async function doImport() {
     const data = await r.json();
     if (!data.ok) throw new Error(data.error);
     input.value = '';
+    await load(true);
+    showToast('"' + name + '" 导入成功', 'ok');
+  } catch (e) {
+    showToast(e.message || '导入失败', 'err');
+  } finally {
+    importing = false;
+    btn.disabled = false;
+    btn.innerHTML = '导入';
+  }
+}
+
+async function doImportApiKey() {
+  if (switching || importing) return;
+  const nameInput = document.getElementById('apikey-name');
+  const tokenInput = document.getElementById('apikey-token');
+  const urlInput = document.getElementById('apikey-url');
+  const name = nameInput.value.trim();
+  const authToken = tokenInput.value.trim();
+  const baseUrl = urlInput.value.trim();
+  if (!name) { nameInput.focus(); showToast('请输入账号名称', 'err'); return; }
+  if (!authToken) { tokenInput.focus(); showToast('请输入 Auth Token', 'err'); return; }
+  importing = true;
+  const btn = document.getElementById('apikey-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> 导入中...';
+  try {
+    const r = await fetch('/api/import-apikey', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, authToken, baseUrl: baseUrl || null }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    nameInput.value = ''; tokenInput.value = ''; urlInput.value = '';
     await load(true);
     showToast('"' + name + '" 导入成功', 'ok');
   } catch (e) {
