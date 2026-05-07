@@ -13,6 +13,9 @@ const CLAUDE_STATE_PATH =
 const CLAUDE_SETTINGS_PATH =
   process.env.CLAUDE_SETTINGS_PATH || path.join(CLAUDE_DIR, 'settings.json');
 
+const PROFILE_CACHE_PATH = path.join(CLAUDE_DIR, 'profile-cache.json');
+const USAGE_CACHE_PATH = path.join(CLAUDE_DIR, 'usage-cache.json');
+
 const CCS_DIR = process.env.CCS_HOME || path.join(HOME, '.ccs');
 const CONFIG_PATH = path.join(CCS_DIR, 'config.json');
 const ACCOUNTS_DIR = path.join(CCS_DIR, 'accounts');
@@ -101,30 +104,44 @@ function formatExpiry(expiresAt) {
 
 // 切换账号后用新 token 调用 /api/oauth/usage，触发 Claude Code 进程检测到
 // credentials 文件 mtime 变化，清除 memoize 缓存，从而立即使用新 token。
+function clearProfileCache() {
+  try { if (fs.existsSync(PROFILE_CACHE_PATH)) fs.unlinkSync(PROFILE_CACHE_PATH); } catch { /* ignore */ }
+  try { if (fs.existsSync(USAGE_CACHE_PATH)) fs.unlinkSync(USAGE_CACHE_PATH); } catch { /* ignore */ }
+}
+
+function _pingOauth(token, apiPath) {
+  return new Promise((resolve) => {
+    const req = https.request(
+      {
+        hostname: 'api.anthropic.com',
+        path: apiPath,
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'anthropic-beta': 'oauth-2025-04-20',
+          Accept: 'application/json',
+        },
+        timeout: 5000,
+      },
+      (res) => { res.resume(); resolve(res.statusCode < 500); },
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
 function triggerCacheInvalidation(credPath) {
+  clearProfileCache();
   return new Promise((resolve) => {
     try {
       const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
       const token = creds?.claudeAiOauth?.accessToken;
       if (!token) return resolve(false);
-
-      const req = https.request(
-        {
-          hostname: 'api.anthropic.com',
-          path: '/api/oauth/usage',
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'anthropic-beta': 'oauth-2025-04-20',
-            Accept: 'application/json',
-          },
-          timeout: 5000,
-        },
-        (res) => { res.resume(); resolve(res.statusCode < 500); },
-      );
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => { req.destroy(); resolve(false); });
-      req.end();
+      Promise.all([
+        _pingOauth(token, '/api/oauth/usage'),
+        _pingOauth(token, '/api/oauth/profile'),
+      ]).then((rs) => resolve(rs.some(Boolean)));
     } catch {
       resolve(false);
     }
@@ -146,6 +163,8 @@ module.exports = {
   CREDENTIALS_PATH,
   CLAUDE_STATE_PATH,
   CLAUDE_SETTINGS_PATH,
+  PROFILE_CACHE_PATH,
+  USAGE_CACHE_PATH,
   CCS_DIR,
   CONFIG_PATH,
   ACCOUNTS_DIR,
@@ -161,5 +180,6 @@ module.exports = {
   maskToken,
   formatExpiry,
   triggerCacheInvalidation,
+  clearProfileCache,
   findClaudeExe,
 };

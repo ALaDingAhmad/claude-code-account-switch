@@ -14,6 +14,7 @@ const {
   extractOauth,
   maskToken,
   formatExpiry,
+  clearProfileCache,
 } = require('./utils');
 
 class AccountStore {
@@ -154,6 +155,7 @@ class AccountStore {
     } else {
       this._switchOauth(n, acct);
     }
+    clearProfileCache();
 
     this._config.activeAccount = n;
     this._config.lastSwitchedAt = new Date().toISOString();
@@ -178,6 +180,14 @@ class AccountStore {
 
     // 切换到 oauth 时清除 settings.json 里的 apikey env
     this._clearApikeyEnv();
+
+    // 从 API Key 切回时 credentials 是从无到有，再 touch 一次确保 Claude Code 进程感知 mtime 变化
+    setTimeout(() => {
+      try {
+        const now = new Date();
+        fs.utimesSync(CREDENTIALS_PATH, now, now);
+      } catch { /* ignore */ }
+    }, 800);
 
     this._config.accounts[n] = {
       ...prev,

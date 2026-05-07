@@ -99,7 +99,9 @@ function startWebServer(port, openBrowser) {
         const store = new AccountStore();
         store.switchAccount(name);
 
-        triggerCacheInvalidation(CREDENTIALS_PATH).catch(() => {});
+        triggerCacheInvalidation(CREDENTIALS_PATH)
+          .then((ok) => console.log(`[switch] ${name} cache-invalidate=${ok}`))
+          .catch((e) => console.log(`[switch] ${name} cache-invalidate error:`, e.message));
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, message: `Switched to "${name}"` }));
