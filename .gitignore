@@ -5,3 +5,6 @@ generated-images/
 *.tmp
 claude-code-account-switcher-spec-final.md
 tmp-*/
+tmp_*.json
+*.tgz
+.claude/
