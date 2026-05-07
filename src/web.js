@@ -29,6 +29,54 @@ function startWebServer(port, openBrowser) {
       }
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/import') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const store = new AccountStore();
+        const name = body.name || store.getLiveEmail();
+        if (!name) throw new Error('无法获取账号名，请手动输入');
+
+        store.importAccount(name);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, message: `Imported "${name}"` }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/import-apikey') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { name, authToken, baseUrl } = body;
+        if (!name) throw new Error('name is required');
+        if (!authToken) throw new Error('authToken is required');
+        const store = new AccountStore();
+        store.importApiKeyAccount(name, authToken, baseUrl);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, message: `Imported API Key account "${name}"` }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/remove') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const name = body.name;
+        if (!name) throw new Error('name is required');
+        const store = new AccountStore();
+        store.removeAccount(name);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, message: `Removed "${name}"` }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/switch') {
       try {
         const body = JSON.parse(await readBody(req));

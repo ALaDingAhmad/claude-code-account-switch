@@ -3,92 +3,262 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CCS - Claude Code Account Switcher</title>
+<title>CCS</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg: #0f1117;
-    --surface: #1a1d27;
-    --border: #2a2d3d;
-    --accent: #d97706;
-    --accent-dim: #92400e;
-    --text: #e2e8f0;
-    --muted: #64748b;
-    --active-bg: #1c2535;
-    --active-border: #3b82f6;
-    --danger: #ef4444;
-    --ok: #22c55e;
-  }
-  body { background: var(--bg); color: var(--text); font: 16px/1.6 "SF Mono","Fira Code",monospace; min-height: 100vh; padding: 32px 16px; }
-  h1 { font-size: 22px; font-weight: 600; letter-spacing: .02em; color: var(--accent); margin-bottom: 4px; }
-  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
-  .section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 12px; }
-  .active-card {
-    background: var(--active-bg); border: 1px solid var(--active-border);
-    border-radius: 10px; padding: 20px 24px; max-width: 780px; margin-bottom: 32px;
-  }
-  .active-card .name { font-size: 19px; font-weight: 700; color: #fff; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-  .badge { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 99px; text-transform: uppercase; letter-spacing: .06em; }
-  .badge-active { background: #1e3a5f; color: #60a5fa; }
-  .badge-pro { background: #3b1f0a; color: var(--accent); }
-  .badge-expired { background: #2d1515; color: var(--danger); }
-  .meta-grid { display: grid; grid-template-columns: 120px 1fr; gap: 6px 14px; font-size: 14px; }
-  .meta-grid .label { color: var(--muted); }
-  .meta-grid .value { color: var(--text); word-break: break-all; }
-  .none-card { color: var(--muted); font-size: 15px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; max-width: 780px; margin-bottom: 32px; }
-  .accounts { display: grid; gap: 12px; max-width: 780px; }
-  .account-card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 18px 22px;
-    display: flex; justify-content: space-between; align-items: center; gap: 16px;
-    transition: border-color .15s;
-  }
-  .account-card:hover { border-color: #3a3d55; }
-  .account-card.is-active { border-color: var(--active-border); background: var(--active-bg); }
-  .account-info { flex: 1; min-width: 0; }
-  .account-info .name { font-weight: 600; font-size: 16px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .account-info .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 10px; }
-  .account-info .meta span { white-space: nowrap; }
-  .btn {
-    border: none; border-radius: 7px; padding: 9px 20px; font: inherit; font-size: 14px; font-weight: 600;
-    cursor: pointer; white-space: nowrap; transition: opacity .1s, background .1s;
-  }
-  .btn:disabled { opacity: .4; cursor: not-allowed; }
-  .btn-switch { background: #d97706; color: #000; }
-  .btn-switch:hover:not(:disabled) { background: #f59e0b; }
-  .btn-active { background: #1e3a5f; color: #60a5fa; cursor: default; }
-  .toast {
-    position: fixed; bottom: 24px; right: 24px; background: #1e293b; border: 1px solid var(--border);
-    border-radius: 10px; padding: 12px 18px; font-size: 15px; max-width: 380px;
-    box-shadow: 0 8px 32px rgba(0,0,0,.4); opacity: 0; transform: translateY(8px);
-    transition: opacity .2s, transform .2s; pointer-events: none; z-index: 999;
-  }
-  .toast.show { opacity: 1; transform: translateY(0); }
-  .toast.ok { border-color: var(--ok); color: var(--ok); }
-  .toast.err { border-color: var(--danger); color: var(--danger); }
-  .poll-indicator { position: fixed; top: 16px; right: 20px; font-size: 13px; color: var(--muted); }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #f5f7ff;
+  --white: #ffffff;
+  --border: #e8eaf4;
+  --border-focus: #a5b4fc;
+  --text: #1e1f2e;
+  --text-dim: #6b7280;
+  --text-muted: #9ca3af;
+  --accent: #6366f1;
+  --accent-light: #eef2ff;
+  --accent-hover: #4f46e5;
+  --green: #10b981;
+  --green-light: #ecfdf5;
+  --red: #ef4444;
+  --red-light: #fef2f2;
+  --yellow: #f59e0b;
+  --yellow-light: #fffbeb;
+  --blue: #3b82f6;
+  --blue-light: #eff6ff;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --shadow: 0 4px 16px rgba(0,0,0,.07), 0 1px 4px rgba(0,0,0,.04);
+  --shadow-lg: 0 10px 40px rgba(0,0,0,.1), 0 2px 8px rgba(0,0,0,.05);
+  --radius: 14px;
+  --radius-sm: 8px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  padding: 40px 24px;
+}
+
+.container { max-width: 700px; margin: 0 auto; }
+
+/* Header */
+.header { display: flex; align-items: center; gap: 14px; margin-bottom: 36px; }
+.logo {
+  width: 42px; height: 42px;
+  background: var(--accent);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 800; color: #fff;
+  box-shadow: 0 4px 12px rgba(99,102,241,.35);
+}
+.header-text h1 { font-size: 20px; font-weight: 700; color: var(--text); }
+.header-text p { font-size: 13px; color: var(--text-muted); }
+.header-right { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+
+/* Card */
+.card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 16px;
+}
+.card-body { padding: 20px 24px; }
+
+/* Active account */
+.active-hero {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 16px;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(99,102,241,.3);
+  position: relative; overflow: hidden;
+}
+.active-hero::after {
+  content: '';
+  position: absolute; right: -30px; top: -30px;
+  width: 160px; height: 160px;
+  background: rgba(255,255,255,.06);
+  border-radius: 50%;
+}
+.active-hero-label {
+  font-size: 11px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; opacity: .7; margin-bottom: 8px;
+}
+.active-hero-name { font-size: 22px; font-weight: 700; margin-bottom: 14px; }
+.active-hero-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.hero-badge {
+  font-size: 11px; font-weight: 600; padding: 3px 10px;
+  border-radius: 99px; background: rgba(255,255,255,.18);
+  letter-spacing: .03em;
+}
+.hero-badge-red { background: rgba(239,68,68,.3); }
+.active-hero-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hero-field-label { font-size: 11px; opacity: .6; margin-bottom: 2px; }
+.hero-field-value { font-size: 13px; font-weight: 500; opacity: .9; word-break: break-all; }
+
+/* Section title */
+.section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-muted); margin-bottom: 10px; margin-top: 24px;
+}
+
+/* Import card */
+.import-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.import-card h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.import-card p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; }
+.import-row { display: flex; gap: 10px; }
+.input {
+  flex: 1; background: var(--bg); border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 14px;
+  font-size: 14px; color: var(--text); font-family: inherit;
+  outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(99,102,241,.12); background: var(--white); }
+.input::placeholder { color: var(--text-muted); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; border-radius: var(--radius-sm);
+  padding: 10px 18px; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+  font-family: inherit;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-accent { background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(99,102,241,.3); }
+.btn-accent:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 4px 14px rgba(99,102,241,.4); transform: translateY(-1px); }
+.btn-accent:active:not(:disabled) { transform: translateY(0); }
+.btn-outline { background: var(--white); color: var(--accent); border: 1.5px solid var(--border-focus); }
+.btn-outline:hover:not(:disabled) { background: var(--accent-light); }
+.btn-current { background: var(--blue-light); color: var(--blue); border: 1px solid rgba(59,130,246,.2); cursor: default; }
+.btn-danger { background: var(--red-light); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+.btn-danger:hover:not(:disabled) { background: rgba(239,68,68,.15); }
+.btn-sm { padding: 7px 14px; font-size: 13px; }
+
+/* Account list */
+.account-list { display: flex; flex-direction: column; gap: 10px; }
+.account-item {
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.account-item:hover { border-color: #c7d2fe; box-shadow: var(--shadow); transform: translateY(-1px); }
+.account-item.is-active { border-color: #a5b4fc; background: linear-gradient(135deg, #fafbff 0%, #f5f3ff 100%); }
+.avatar {
+  width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+  background: var(--accent-light); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 700; text-transform: uppercase;
+}
+.avatar-active { background: var(--blue-light); color: var(--blue); }
+.acct-name { font-size: 14px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 3px; }
+.acct-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 12px; flex-wrap: wrap; }
+.acct-info { flex: 1; min-width: 0; }
+.acct-actions { flex-shrink: 0; }
+
+/* Badges */
+.badge {
+  font-size: 11px; font-weight: 600; padding: 2px 9px;
+  border-radius: 99px; letter-spacing: .03em;
+}
+.badge-blue { background: var(--blue-light); color: var(--blue); }
+.badge-purple { background: var(--accent-light); color: var(--accent); }
+.badge-green { background: var(--green-light); color: var(--green); }
+.badge-red { background: var(--red-light); color: var(--red); }
+
+/* Empty */
+.empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }
+.empty-icon { font-size: 36px; margin-bottom: 10px; }
+
+/* None */
+.none-hint {
+  background: var(--white); border: 1.5px dashed var(--border);
+  border-radius: var(--radius); padding: 20px 24px;
+  color: var(--text-muted); font-size: 13px; margin-bottom: 16px;
+}
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 28px; right: 28px;
+  background: var(--white); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 13px 18px;
+  font-size: 13px; color: var(--text-dim); max-width: 320px;
+  box-shadow: var(--shadow-lg);
+  display: flex; align-items: center; gap: 10px;
+  opacity: 0; transform: translateY(10px);
+  transition: opacity .2s, transform .2s;
+  pointer-events: none; z-index: 999;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
+.toast.ok .toast-dot { background: var(--green); }
+.toast.err .toast-dot { background: var(--red); }
+
+/* Spinner */
+.spin {
+  display: inline-block; width: 13px; height: 13px;
+  border: 2px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-<h1>CCS</h1>
-<p class="subtitle">Claude Code Account Switcher</p>
+<div class="container">
 
-<div class="section-title">Active Account</div>
-<div id="active-section"></div>
+  <div class="header">
+    <div class="logo">C</div>
+    <div class="header-text">
+      <h1>CCS</h1>
+      <p>Claude Code Account Switcher</p>
+    </div>
+    <div class="header-right" id="poll"></div>
+  </div>
 
-<div class="section-title">Imported Accounts</div>
-<div id="accounts-section" class="accounts"></div>
+  <!-- Active account -->
+  <div id="active-section"></div>
 
-<div class="toast" id="toast"></div>
-<div class="poll-indicator" id="poll-indicator"></div>
+  <!-- Import -->
+  <div class="section-label">导入账号</div>
+  <div class="import-card">
+    <h3>导入当前登录账号</h3>
+    <p>将 Claude Code 当前登录的凭证保存为快照，之后可随时一键切换。留空则自动使用邮箱地址作为账号名。</p>
+    <div class="import-row">
+      <input class="input" id="import-name" type="text" placeholder="留空自动使用邮箱" maxlength="128" />
+      <button class="btn btn-accent" id="import-btn" onclick="doImport()">导入</button>
+    </div>
+  </div>
+
+  <!-- Account list -->
+  <div class="section-label">已导入账号</div>
+  <div id="accounts-section" class="account-list"></div>
+
+</div>
+
+<div class="toast" id="toast">
+  <div class="toast-dot"></div>
+  <span id="toast-msg"></span>
+</div>
 
 <script>
 let switching = false;
-
-function expiredBadge(expiresAt) {
-  if (!expiresAt) return '';
-  return Date.now() > expiresAt ? '<span class="badge badge-expired">expired</span>' : '';
-}
+let importing = false;
 
 function esc(s) {
   const d = document.createElement('div');
@@ -96,62 +266,76 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function expiredBadge(expiresAt) {
+  if (!expiresAt) return '';
+  return Date.now() > expiresAt
+    ? '<span class="badge badge-red">已过期</span>'
+    : '<span class="badge badge-green">有效</span>';
+}
+
 function render(data) {
   const { activeAccount, accounts } = data;
 
+  // Active
   const activeEl = document.getElementById('active-section');
   if (activeAccount && accounts[activeAccount]) {
     const a = accounts[activeAccount];
     activeEl.innerHTML =
-      '<div class="active-card">' +
-        '<div class="name">' + esc(activeAccount) +
-          '<span class="badge badge-active">active</span>' +
-          (a.subscriptionType ? '<span class="badge badge-pro">' + esc(a.subscriptionType) + '</span>' : '') +
-          expiredBadge(a.expiresAt) +
+      '<div class="active-hero">' +
+        '<div class="active-hero-label">当前账号</div>' +
+        '<div class="active-hero-name">' + esc(activeAccount) + '</div>' +
+        '<div class="active-hero-badges">' +
+          (a.subscriptionType ? '<span class="hero-badge">' + esc(a.subscriptionType) + '</span>' : '') +
+          (a.expiresAt && Date.now() > a.expiresAt ? '<span class="hero-badge hero-badge-red">Token 已过期</span>' : '') +
         '</div>' +
-        '<div class="meta-grid">' +
-          (a.displayName || a.emailAddress
-            ? '<span class="label">Identity</span><span class="value">' + esc((a.displayName || '') + (a.emailAddress ? ' <' + a.emailAddress + '>' : '')) + '</span>'
-            : '') +
-          (a.organizationName ? '<span class="label">Organization</span><span class="value">' + esc(a.organizationName) + '</span>' : '') +
-          '<span class="label">Token</span><span class="value">' + esc(a.accessTokenMasked || 'N/A') + '</span>' +
-          '<span class="label">Expires</span><span class="value">' + esc(a.expiresIn || 'unknown') + '</span>' +
+        '<div class="active-hero-grid">' +
+          (a.emailAddress ? '<div><div class="hero-field-label">邮箱</div><div class="hero-field-value">' + esc(a.emailAddress) + '</div></div>' : '') +
+          (a.displayName ? '<div><div class="hero-field-label">名称</div><div class="hero-field-value">' + esc(a.displayName) + '</div></div>' : '') +
+          (a.organizationName ? '<div><div class="hero-field-label">组织</div><div class="hero-field-value">' + esc(a.organizationName) + '</div></div>' : '') +
+          '<div><div class="hero-field-label">Token 到期</div><div class="hero-field-value">' + esc(a.expiresIn || 'unknown') + '</div></div>' +
         '</div>' +
       '</div>';
   } else {
-    activeEl.innerHTML = '<div class="none-card">No active account. Import an account with <code>ccs import &lt;name&gt;</code></div>';
+    activeEl.innerHTML = '<div class="none-hint">暂无活跃账号，请先在 Claude Code 中登录，然后在下方导入。</div>';
   }
 
+  // List
   const listEl = document.getElementById('accounts-section');
   const names = Object.keys(accounts);
   if (names.length === 0) {
-    listEl.innerHTML = '<div class="none-card">No imported accounts.</div>';
+    listEl.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div>还没有导入任何账号</div></div>';
     return;
   }
   listEl.innerHTML = names.map(name => {
     const a = accounts[name];
     const isActive = name === activeAccount;
-    return '<div class="account-card' + (isActive ? ' is-active' : '') + '">' +
-      '<div class="account-info">' +
-        '<div class="name">' + esc(name) +
-          (isActive ? '<span class="badge badge-active">active</span>' : '') +
-          (a.subscriptionType ? '<span class="badge badge-pro">' + esc(a.subscriptionType) + '</span>' : '') +
+    return '<div class="account-item' + (isActive ? ' is-active' : '') + '">' +
+      '<div class="avatar' + (isActive ? ' avatar-active' : '') + '">' + esc(name[0].toUpperCase()) + '</div>' +
+      '<div class="acct-info">' +
+        '<div class="acct-name">' + esc(name) +
+          (isActive ? '<span class="badge badge-blue">使用中</span>' : '') +
+          (a.subscriptionType ? '<span class="badge badge-purple">' + esc(a.subscriptionType) + '</span>' : '') +
           expiredBadge(a.expiresAt) +
         '</div>' +
-        '<div class="meta">' +
+        '<div class="acct-meta">' +
           (a.emailAddress ? '<span>' + esc(a.emailAddress) + '</span>' : '') +
-          (a.organizationName ? '<span>' + esc(a.organizationName) + '</span>' : '') +
           '<span>' + esc(a.expiresIn || 'unknown') + '</span>' +
         '</div>' +
       '</div>' +
-      (isActive
-        ? '<button class="btn btn-active" disabled>Current</button>'
-        : '<button class="btn btn-switch" data-name="' + esc(name) + '">Switch</button>') +
+      '<div class="acct-actions">' +
+        (isActive
+          ? '<button class="btn btn-sm btn-current" disabled>使用中</button>'
+          : '<button class="btn btn-sm btn-outline switch-btn" data-name="' + esc(name) + '">切换</button>') +
+        '<button class="btn btn-sm btn-danger remove-btn" data-name="' + esc(name) + '">删除</button>' +
+      '</div>' +
     '</div>';
   }).join('');
 
-  document.querySelectorAll('.btn-switch').forEach(btn => {
+  document.querySelectorAll('.switch-btn').forEach(btn => {
     btn.addEventListener('click', () => doSwitch(btn.dataset.name));
+  });
+  document.querySelectorAll('.remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => doRemove(btn.dataset.name));
   });
 }
 
@@ -160,38 +344,83 @@ async function load(silent) {
     const r = await fetch('/api/status');
     const data = await r.json();
     if (data.ok) render(data);
-    if (!silent) document.getElementById('poll-indicator').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    if (!silent) document.getElementById('poll').textContent = '更新于 ' + new Date().toLocaleTimeString();
   } catch { /* ignore */ }
 }
 
 async function doSwitch(name) {
-  if (switching) return;
+  if (switching || importing) return;
   switching = true;
-  document.querySelectorAll('.btn-switch').forEach(b => b.disabled = true);
-  showToast('Switching to "' + name + '"...', '');
-
+  document.querySelectorAll('.switch-btn').forEach(b => b.disabled = true);
+  showToast('正在切换到 "' + name + '"...', '');
   try {
     const r = await fetch('/api/switch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
     const data = await r.json();
     if (!data.ok) throw new Error(data.error);
     await load(true);
-    showToast(data.message || 'Switched to "' + name + '"', 'ok');
+    showToast('已切换到 "' + name + '"', 'ok');
   } catch (e) {
-    showToast(e.message || 'Switch failed', 'err');
+    showToast(e.message || '切换失败', 'err');
   } finally {
     switching = false;
-    document.querySelectorAll('.btn-switch').forEach(b => b.disabled = false);
+    document.querySelectorAll('.switch-btn').forEach(b => b.disabled = false);
   }
 }
+
+async function doRemove(name) {
+  if (!confirm('"' + name + '" 将被删除，确认吗？')) return;
+  try {
+    const r = await fetch('/api/remove', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    await load(true);
+    showToast('"' + name + '" 已删除', 'ok');
+  } catch (e) {
+    showToast(e.message || '删除失败', 'err');
+  }
+}
+
+async function doImport() {
+  if (switching || importing) return;
+  const input = document.getElementById('import-name');
+  const name = input.value.trim();
+  importing = true;
+  const btn = document.getElementById('import-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> 导入中...';
+  try {
+    const r = await fetch('/api/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    input.value = '';
+    await load(true);
+    showToast('"' + name + '" 导入成功', 'ok');
+  } catch (e) {
+    showToast(e.message || '导入失败', 'err');
+  } finally {
+    importing = false;
+    btn.disabled = false;
+    btn.innerHTML = '导入';
+  }
+}
+
+document.getElementById('import-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doImport();
+});
 
 let toastTimer;
 function showToast(msg, type) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
+  document.getElementById('toast-msg').textContent = msg;
   t.className = 'toast show' + (type ? ' ' + type : '');
   clearTimeout(toastTimer);
   if (type) toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
