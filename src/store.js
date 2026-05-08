@@ -305,11 +305,16 @@ class AccountStore {
 
   clearLiveAuth() {
     deleteLiveCredentials();
+    this._clearApikeyEnv();
+    clearProfileCache();
     const live = this._readLiveState();
     const next = { ...live };
     delete next.userID;
     delete next.oauthAccount;
     atomicWriteJson(CLAUDE_STATE_PATH, next);
+    this._config.activeAccount = null;
+    this._config.lastSwitchedAt = new Date().toISOString();
+    this._save();
   }
 
   listAccounts() {

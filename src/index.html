@@ -368,6 +368,9 @@ function render(data) {
               (a.organizationName ? '<div><div class="hero-field-label">组织</div><div class="hero-field-value">' + esc(a.organizationName) + '</div></div>' : '') +
               '<div><div class="hero-field-label">Token 到期</div><div class="hero-field-value">' + esc(a.expiresIn || 'unknown') + '</div></div>') +
         '</div>' +
+        '<div style="margin-top:18px;display:flex;justify-content:flex-end">' +
+          '<button class="btn" id="logout-btn" onclick="doLogout()" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)">退出当前账号</button>' +
+        '</div>' +
       '</div>';
   } else {
     activeEl.innerHTML = '<div class="none-hint">暂无活跃账号，请先在 Claude Code 中登录，然后在下方导入。</div>';
@@ -474,6 +477,19 @@ async function doRemove(name) {
     showToast('"' + name + '" 已删除', 'ok');
   } catch (e) {
     showToast(e.message || '删除失败', 'err');
+  }
+}
+
+async function doLogout() {
+  if (!confirm('退出当前账号？将清空 Claude Code 当前登录状态。')) return;
+  try {
+    const r = await fetch('/api/logout', { method: 'POST' });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    await load(true);
+    showToast('已退出当前账号', 'ok');
+  } catch (e) {
+    showToast(e.message || '退出失败', 'err');
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "claude-code-account-switch",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "Claude Code account switcher for Windows using credential snapshot restore",
   "bin": {
     "ccs": "bin/ccs.js"

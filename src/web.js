@@ -101,6 +101,18 @@ function startWebServer(port, openBrowser) {
       }
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/logout') {
+      try {
+        const store = new AccountStore();
+        store.clearLiveAuth();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, message: '已退出当前账号' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/switch') {
       try {
         const body = JSON.parse(await readBody(req));
