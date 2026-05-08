@@ -131,11 +131,11 @@ function _pingOauth(token, apiPath) {
   });
 }
 
-function triggerCacheInvalidation(credPath) {
+function triggerCacheInvalidation() {
   clearProfileCache();
   return new Promise((resolve) => {
     try {
-      const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+      const creds = readLiveCredentials();
       const token = creds?.claudeAiOauth?.accessToken;
       if (!token) return resolve(false);
       Promise.all([
@@ -146,6 +146,64 @@ function triggerCacheInvalidation(credPath) {
       resolve(false);
     }
   });
+}
+
+const IS_MAC = process.platform === 'darwin';
+const KEYCHAIN_SERVICE = 'Claude Code-credentials';
+const KEYCHAIN_ACCOUNT = os.userInfo().username;
+
+function readLiveCredentials() {
+  if (IS_MAC) {
+    try {
+      const out = execSync(
+        `security find-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}" -w`,
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim();
+      return out ? JSON.parse(out) : null;
+    } catch {
+      return null;
+    }
+  }
+  if (!fs.existsSync(CREDENTIALS_PATH)) return null;
+  try { return readJson(CREDENTIALS_PATH); } catch { return null; }
+}
+
+function writeLiveCredentials(json) {
+  const content = JSON.stringify(json);
+  if (IS_MAC) {
+    execSync(
+      `security add-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}" -w ${JSON.stringify(content)} -U`,
+      { stdio: ['ignore', 'ignore', 'pipe'] }
+    );
+    return;
+  }
+  atomicWriteJson(CREDENTIALS_PATH, json);
+}
+
+function deleteLiveCredentials() {
+  if (IS_MAC) {
+    try {
+      execSync(
+        `security delete-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}"`,
+        { stdio: ['ignore', 'ignore', 'ignore'] }
+      );
+    } catch { /* not present */ }
+    return;
+  }
+  try { if (fs.existsSync(CREDENTIALS_PATH)) fs.unlinkSync(CREDENTIALS_PATH); } catch { /* ignore */ }
+}
+
+function liveCredentialsExist() {
+  if (IS_MAC) {
+    try {
+      execSync(
+        `security find-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}"`,
+        { stdio: ['ignore', 'ignore', 'ignore'] }
+      );
+      return true;
+    } catch { return false; }
+  }
+  return fs.existsSync(CREDENTIALS_PATH);
 }
 
 function findClaudeExe() {
@@ -181,5 +239,10 @@ module.exports = {
   formatExpiry,
   triggerCacheInvalidation,
   clearProfileCache,
+  readLiveCredentials,
+  writeLiveCredentials,
+  deleteLiveCredentials,
+  liveCredentialsExist,
+  IS_MAC,
   findClaudeExe,
 };

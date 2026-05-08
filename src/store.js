@@ -15,6 +15,11 @@ const {
   maskToken,
   formatExpiry,
   clearProfileCache,
+  readLiveCredentials,
+  writeLiveCredentials,
+  deleteLiveCredentials,
+  liveCredentialsExist,
+  IS_MAC,
 } = require('./utils');
 
 class AccountStore {
@@ -83,13 +88,14 @@ class AccountStore {
     return state.oauthAccount?.emailAddress || null;
   }
 
-  // 导入 OAuth 账号
-  importAccount(name, sourcePath = CREDENTIALS_PATH) {
+  // 导入 OAuth 账号（从当前 live credentials 读取）
+  importAccount(name, sourcePath = null) {
     const n = sanitizeName(name);
-    const sourceJson = readJson(sourcePath);
+    const sourceJson = sourcePath ? readJson(sourcePath) : readLiveCredentials();
+    if (!sourceJson) throw new Error('No live OAuth credentials found');
     const oauth = extractOauth(sourceJson);
     if (!oauth || !oauth.accessToken || !oauth.refreshToken) {
-      throw new Error(`Invalid credentials file: ${sourcePath}`);
+      throw new Error('Invalid live OAuth credentials');
     }
 
     const liveState = this._readLiveState();
@@ -175,19 +181,21 @@ class AccountStore {
     const statePath = stateSnapshotPath(n);
     const stateSnap = fileExists(statePath) ? readJson(statePath) : null;
 
-    atomicWriteJson(CREDENTIALS_PATH, snapshot);
+    writeLiveCredentials(snapshot);
     if (stateSnap) this._restoreStateFields(stateSnap);
 
     // 切换到 oauth 时清除 settings.json 里的 apikey env
     this._clearApikeyEnv();
 
-    // 从 API Key 切回时 credentials 是从无到有，再 touch 一次确保 Claude Code 进程感知 mtime 变化
-    setTimeout(() => {
-      try {
-        const now = new Date();
-        fs.utimesSync(CREDENTIALS_PATH, now, now);
-      } catch { /* ignore */ }
-    }, 800);
+    // Windows: 从 API Key 切回时 credentials 是从无到有，再 touch 一次确保 Claude Code 进程感知 mtime 变化
+    if (!IS_MAC) {
+      setTimeout(() => {
+        try {
+          const now = new Date();
+          fs.utimesSync(CREDENTIALS_PATH, now, now);
+        } catch { /* ignore */ }
+      }, 800);
+    }
 
     this._config.accounts[n] = {
       ...prev,
@@ -217,9 +225,7 @@ class AccountStore {
     atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
 
     // 清空 OAuth 凭证和账号状态，避免状态栏继续显示旧 OAuth 用户
-    if (fileExists(CREDENTIALS_PATH)) {
-      try { fs.unlinkSync(CREDENTIALS_PATH); } catch { atomicWriteJson(CREDENTIALS_PATH, {}); }
-    }
+    deleteLiveCredentials();
     const live = this._readLiveState();
     const next = { ...live };
     delete next.userID;
@@ -298,9 +304,7 @@ class AccountStore {
   }
 
   clearLiveAuth() {
-    if (fileExists(CREDENTIALS_PATH)) {
-      try { fs.unlinkSync(CREDENTIALS_PATH); } catch { atomicWriteJson(CREDENTIALS_PATH, {}); }
-    }
+    deleteLiveCredentials();
     const live = this._readLiveState();
     const next = { ...live };
     delete next.userID;

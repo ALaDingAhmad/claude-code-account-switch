@@ -6,6 +6,8 @@ const path = require('path');
 const AccountStore = require(path.join(__dirname, '..', 'src', 'store'));
 const {
   CREDENTIALS_PATH,
+  liveCredentialsExist,
+  IS_MAC,
   CLAUDE_STATE_PATH,
   CONFIG_PATH,
   findClaudeExe,
@@ -58,7 +60,7 @@ async function dispatch(cmd, rest) {
 
 function cmdImport(rest) {
   const name = rest[0];
-  const sourcePath = rest[1] || CREDENTIALS_PATH;
+  const sourcePath = rest[1] || null;
   if (!name) throw new Error('Usage: ccs import <name> [credentials-path]');
 
   const store = new AccountStore();
@@ -76,7 +78,7 @@ async function cmdSwitch(rest) {
   printAccountSummary(`Switched to "${name}"`, account);
 
   process.stdout.write('Invalidating Claude Code token cache... ');
-  const ok = await triggerCacheInvalidation(CREDENTIALS_PATH);
+  const ok = await triggerCacheInvalidation();
   console.log(ok ? 'done.' : 'skipped (offline or no active session).');
 }
 
@@ -107,7 +109,7 @@ function cmdDoctor() {
   const status = store.getStatus();
   console.log('CCS doctor');
   console.log(`  Claude executable : ${findClaudeExe() || 'not found'}`);
-  console.log(`  Credentials file  : ${fs.existsSync(CREDENTIALS_PATH) ? 'present' : 'missing'} (${CREDENTIALS_PATH})`);
+  console.log(`  Credentials       : ${liveCredentialsExist() ? 'present' : 'missing'} (${IS_MAC ? 'macOS Keychain: Claude Code-credentials' : CREDENTIALS_PATH})`);
   console.log(`  State file        : ${fs.existsSync(CLAUDE_STATE_PATH) ? 'present' : 'missing'} (${CLAUDE_STATE_PATH})`);
   console.log(`  Config file       : ${fs.existsSync(CONFIG_PATH) ? 'present' : 'missing'} (${CONFIG_PATH})`);
   console.log(`  Active account    : ${status.activeAccount || 'none'}`);
