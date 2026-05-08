@@ -6,9 +6,20 @@ const AccountStore = require('./store');
 const { triggerCacheInvalidation } = require('./utils');
 
 const HTML_PATH = path.join(__dirname, 'index.html');
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function startWebServer(port, openBrowser) {
+  let idleTimer = null;
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      console.log(`Idle for ${IDLE_TIMEOUT_MS / 1000}s, shutting down.`);
+      process.exit(0);
+    }, IDLE_TIMEOUT_MS);
+  };
+
   const server = http.createServer(async (req, res) => {
+    resetIdle();
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
 
     if (req.method === 'GET' && url.pathname === '/') {
@@ -116,8 +127,9 @@ function startWebServer(port, openBrowser) {
   });
 
   server.listen(port, '127.0.0.1', () => {
+    resetIdle();
     const url = `http://127.0.0.1:${port}`;
-    console.log(`CCS web UI running at ${url}`);
+    console.log(`CCS web UI running at ${url}  (idle timeout: ${IDLE_TIMEOUT_MS / 60000} min)`);
     console.log('Press Ctrl+C to stop.');
     if (openBrowser) {
       try {
