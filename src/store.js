@@ -314,12 +314,21 @@ class AccountStore {
 
   listAccounts() {
     const result = {};
+    const liveCreds = readLiveCredentials();
+    const liveOauth = liveCreds && extractOauth(liveCreds);
     for (const [n, raw] of Object.entries(this._config.accounts)) {
       const entry = this._entry(n, raw);
+      const isActive = n === this._config.activeAccount;
+      // 活跃 OAuth 账号：用 live credentials 的最新 token 元数据覆盖 snapshot
+      if (isActive && raw.type === 'oauth' && liveOauth) {
+        entry.expiresAt = liveOauth.expiresAt || entry.expiresAt;
+        entry.subscriptionType = liveOauth.subscriptionType || entry.subscriptionType;
+        entry.accessTokenMasked = maskToken(liveOauth.accessToken);
+      }
       result[n] = {
         ...entry,
-        isActive: n === this._config.activeAccount,
-        expiresIn: raw.type === 'apikey' ? null : formatExpiry(raw.expiresAt),
+        isActive,
+        expiresIn: raw.type === 'apikey' ? null : formatExpiry(entry.expiresAt),
       };
     }
     return result;
@@ -328,6 +337,11 @@ class AccountStore {
   getStatus() {
     const { activeAccount, accounts, lastSwitchedAt } = this._config;
     const raw = activeAccount ? accounts[activeAccount] : null;
+    let liveOauth = null;
+    if (raw && raw.type === 'oauth') {
+      const liveCreds = readLiveCredentials();
+      liveOauth = liveCreds && extractOauth(liveCreds);
+    }
     return {
       activeAccount,
       accountCount: Object.keys(accounts).length,
@@ -343,10 +357,10 @@ class AccountStore {
             }
           : {
               type: 'oauth',
-              subscriptionType: raw.subscriptionType,
-              expiresAt: raw.expiresAt,
-              expiresIn: formatExpiry(raw.expiresAt),
-              accessTokenMasked: raw.accessTokenMasked || maskToken(raw.accessToken),
+              subscriptionType: liveOauth?.subscriptionType || raw.subscriptionType,
+              expiresAt: liveOauth?.expiresAt || raw.expiresAt,
+              expiresIn: formatExpiry(liveOauth?.expiresAt || raw.expiresAt),
+              accessTokenMasked: liveOauth ? maskToken(liveOauth.accessToken) : (raw.accessTokenMasked || maskToken(raw.accessToken)),
               emailAddress: raw.emailAddress || null,
               displayName: raw.displayName || null,
               organizationName: raw.organizationName || null,
