@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const AccountStore = require('./store');
-const { CREDENTIALS_PATH, triggerCacheInvalidation } = require('./utils');
+const { triggerCacheInvalidation } = require('./utils');
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 
@@ -99,7 +99,7 @@ function startWebServer(port, openBrowser) {
         const store = new AccountStore();
         store.switchAccount(name);
 
-        triggerCacheInvalidation(CREDENTIALS_PATH)
+        triggerCacheInvalidation()
           .then((ok) => console.log(`[switch] ${name} cache-invalidate=${ok}`))
           .catch((e) => console.log(`[switch] ${name} cache-invalidate error:`, e.message));
 
