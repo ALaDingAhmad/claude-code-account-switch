@@ -3,15 +3,24 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const AccountStore = require('./store');
-const { triggerCacheInvalidation } = require('./utils');
+const { triggerCacheInvalidation, writeWebPid, clearWebPid } = require('./utils');
+const share = require('./share');
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function startWebServer(port, openBrowser) {
   let idleTimer = null;
+  const cancelIdle = () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  };
+
+  process.on('exit', clearWebPid);
+  process.on('SIGINT', () => { clearWebPid(); process.exit(0); });
+  process.on('SIGTERM', () => { clearWebPid(); process.exit(0); });
   const resetIdle = () => {
-    if (idleTimer) clearTimeout(idleTimer);
+    cancelIdle();
+    if (share.getShareConfig()?.enabled) return;  // 启用 share（含被动方）后常驻
     idleTimer = setTimeout(() => {
       console.log(`Idle for ${IDLE_TIMEOUT_MS / 1000}s, shutting down.`);
       process.exit(0);
@@ -25,6 +34,20 @@ function startWebServer(port, openBrowser) {
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(fs.readFileSync(HTML_PATH, 'utf8'));
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/version') {
+      const pkg = require('../package.json');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, version: pkg.version }));
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/shutdown') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, message: 'shutting down' }));
+      console.log('Shutdown requested via web UI.');
+      setTimeout(() => process.exit(0), 100);
+      return;
     }
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
@@ -113,6 +136,107 @@ function startWebServer(port, openBrowser) {
       }
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/sync') {
+      try {
+        const store = new AccountStore();
+        const result = store.syncActive();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, ...result }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    // --- Share Sync 配置接口 ---
+    if (req.method === 'GET' && url.pathname === '/api/share/config') {
+      const cfg = share.getShareConfig() || share.defaultShareConfig();
+      const safe = { ...cfg, secret: cfg.secret ? cfg.secret.slice(0, 6) + '...' + cfg.secret.slice(-4) : '' };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, config: safe, running: share.isRunning() }));
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/share/secret') {
+      const cfg = share.getShareConfig();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, secret: cfg?.secret || '' }));
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/share/config') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const cfg = share.setShareConfig(body);
+        if (cfg.enabled) {
+          cancelIdle();              // 启用后立刻取消 idle 计时
+          share.startDaemon();        // peerUrl 为空时是被动方，函数内部会跳过 timer
+        } else {
+          share.stopDaemon();
+          resetIdle();                // 禁用后重新进入 idle 倒计时
+        }
+        // 同步更新 pid 文件里的 share 状态，让 ccs CLI 能立即反映
+        try {
+          const cur = require('./utils').readWebPid();
+          if (cur) writeWebPid({ port: cur.port, bind: cur.bind, shareEnabled: !!cfg.enabled, sharePeerUrl: cfg.peerUrl || '' });
+        } catch { /* ignore */ }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, config: { ...cfg, secret: cfg.secret ? '***' : '' } }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/share/sync-now') {
+      try {
+        const r = await share.syncOnce((m) => console.log(`[share] ${m}`));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, ...r }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    // --- Share Sync 对端互访接口（必须鉴权）---
+    if (url.pathname === '/api/share/snapshot' ||
+        url.pathname === '/api/share/account') {
+      const cfg = share.getShareConfig();
+      if (!cfg?.enabled || !cfg.secret || !share.checkAuth(req, cfg.secret)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/share/snapshot') {
+        const snap = share.localSnapshot();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(snap));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/share/account') {
+        const name = url.searchParams.get('name');
+        if (!name) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: 'name required' }));
+        }
+        const detail = share.localAccountDetail(name);
+        if (!detail) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: 'no such account' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(detail));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/share/account') {
+        try {
+          const body = JSON.parse(await readBody(req));
+          share.applyAccountDetail(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      }
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/switch') {
       try {
         const body = JSON.parse(await readBody(req));
@@ -138,10 +262,26 @@ function startWebServer(port, openBrowser) {
     res.end(JSON.stringify({ ok: false, error: 'Not found' }));
   });
 
-  server.listen(port, '127.0.0.1', () => {
+  const cfg = share.getShareConfig();
+  const bind = (cfg?.enabled && cfg.bindAddress) ? cfg.bindAddress : '127.0.0.1';
+  server.listen(port, bind, () => {
     resetIdle();
-    const url = `http://127.0.0.1:${port}`;
-    console.log(`CCS web UI running at ${url}  (idle timeout: ${IDLE_TIMEOUT_MS / 60000} min)`);
+    try {
+      const r = new AccountStore().syncActive();
+      if (r.synced) console.log(`[boot] synced live -> snapshot of "${r.name}"`);
+    } catch (e) {
+      console.log(`[boot] sync skipped: ${e.message}`);
+    }
+    if (cfg?.enabled) share.startDaemon();
+    writeWebPid({
+      port,
+      bind,
+      shareEnabled: !!cfg?.enabled,
+      sharePeerUrl: cfg?.peerUrl || '',
+    });
+    const url = `http://${bind === '0.0.0.0' ? '127.0.0.1' : bind}:${port}`;
+    const role = cfg?.enabled ? (cfg.peerUrl ? 'share-sync ACTIVE, no idle timeout' : 'share-sync PASSIVE, no idle timeout') : 'idle ' + (IDLE_TIMEOUT_MS / 60000) + ' min';
+    console.log(`CCS web UI running at ${url}  (bind=${bind}, ${role})`);
     console.log('Press Ctrl+C to stop.');
     if (openBrowser) {
       try {

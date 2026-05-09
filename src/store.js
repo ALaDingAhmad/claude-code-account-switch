@@ -81,6 +81,39 @@ class AccountStore {
     atomicWriteJson(CLAUDE_STATE_PATH, next);
   }
 
+  // 切换/退出前把当前 live credentials 回写到 active 账号快照，
+  // 防止 Claude Code 自动 rotate 后旧快照里的 refresh_token 失效。
+  _syncActiveSnapshot() {
+    const active = this._config.activeAccount;
+    if (!active) return;
+    const cur = this._config.accounts[active];
+    if (!cur || cur.type !== 'oauth') return;
+
+    const live = readLiveCredentials();
+    if (!live) return;
+    const oauth = extractOauth(live);
+    if (!oauth || !oauth.accessToken || !oauth.refreshToken) return;
+
+    atomicWriteJson(credentialsSnapshotPath(active), live);
+    const liveState = this._readLiveState();
+    atomicWriteJson(stateSnapshotPath(active), {
+      userID: liveState.userID || null,
+      oauthAccount: liveState.oauthAccount || null,
+    });
+
+    cur.expiresAt = oauth.expiresAt || cur.expiresAt;
+    cur.subscriptionType = oauth.subscriptionType || cur.subscriptionType;
+    cur.accessTokenMasked = maskToken(oauth.accessToken);
+    if (liveState.oauthAccount) {
+      cur.emailAddress = liveState.oauthAccount.emailAddress || cur.emailAddress;
+      cur.displayName = liveState.oauthAccount.displayName || cur.displayName;
+      cur.organizationName = liveState.oauthAccount.organizationName || cur.organizationName;
+      cur.accountUuid = liveState.oauthAccount.accountUuid || cur.accountUuid;
+    }
+    if (liveState.userID) cur.userID = liveState.userID;
+    cur.updatedAt = new Date().toISOString();
+  }
+
   // ── 公开 API ──────────────────────────────────────────────────────────────
 
   getLiveEmail() {
@@ -155,6 +188,8 @@ class AccountStore {
     const n = sanitizeName(name);
     const acct = this._config.accounts[n];
     if (!acct) throw new Error(`Unknown account "${n}"`);
+
+    if (n !== this._config.activeAccount) this._syncActiveSnapshot();
 
     if (acct.type === 'apikey') {
       this._switchApiKey(n, acct);
@@ -304,6 +339,7 @@ class AccountStore {
   }
 
   clearLiveAuth() {
+    this._syncActiveSnapshot();
     deleteLiveCredentials();
     this._clearApikeyEnv();
     clearProfileCache();
@@ -315,6 +351,21 @@ class AccountStore {
     this._config.activeAccount = null;
     this._config.lastSwitchedAt = new Date().toISOString();
     this._save();
+  }
+
+  // 主动同步：把当前 live credentials 回写到 active 账号快照
+  syncActive() {
+    const active = this._config.activeAccount;
+    if (!active) return { synced: false, reason: 'no active account' };
+    const acct = this._config.accounts[active];
+    if (!acct || acct.type !== 'oauth') {
+      return { synced: false, reason: 'active account is not oauth' };
+    }
+    const live = readLiveCredentials();
+    if (!live) return { synced: false, reason: 'no live credentials' };
+    this._syncActiveSnapshot();
+    this._save();
+    return { synced: true, name: active };
   }
 
   listAccounts() {

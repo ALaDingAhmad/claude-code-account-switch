@@ -19,6 +19,7 @@ const USAGE_CACHE_PATH = path.join(CLAUDE_DIR, 'usage-cache.json');
 const CCS_DIR = process.env.CCS_HOME || path.join(HOME, '.ccs');
 const CONFIG_PATH = path.join(CCS_DIR, 'config.json');
 const ACCOUNTS_DIR = path.join(CCS_DIR, 'accounts');
+const WEB_PID_PATH = path.join(CCS_DIR, 'web.pid');
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -206,6 +207,26 @@ function liveCredentialsExist() {
   return fs.existsSync(CREDENTIALS_PATH);
 }
 
+function writeWebPid(info) {
+  ensureCcsDirs();
+  const data = { pid: process.pid, ...info, writtenAt: new Date().toISOString() };
+  fs.writeFileSync(WEB_PID_PATH, JSON.stringify(data, null, 2));
+}
+
+function readWebPid() {
+  if (!fs.existsSync(WEB_PID_PATH)) return null;
+  try {
+    const info = JSON.parse(fs.readFileSync(WEB_PID_PATH, 'utf8'));
+    if (!info.pid) return null;
+    try { process.kill(info.pid, 0); } catch { return null; }
+    return info;
+  } catch { return null; }
+}
+
+function clearWebPid() {
+  try { if (fs.existsSync(WEB_PID_PATH)) fs.unlinkSync(WEB_PID_PATH); } catch { /* ignore */ }
+}
+
 function findClaudeExe() {
   try {
     const out = execSync('where claude', { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
@@ -226,6 +247,7 @@ module.exports = {
   CCS_DIR,
   CONFIG_PATH,
   ACCOUNTS_DIR,
+  WEB_PID_PATH,
   ensureDir,
   ensureCcsDirs,
   atomicWriteJson,
@@ -245,4 +267,7 @@ module.exports = {
   liveCredentialsExist,
   IS_MAC,
   findClaudeExe,
+  writeWebPid,
+  readWebPid,
+  clearWebPid,
 };

@@ -9,6 +9,7 @@ Windows / macOS CLI 工具，通过备份和还原 Claude Code 凭证（Windows 
 - `import`：将当前登录的 credentials 和账号状态快照保存到 `~/.ccs/accounts/`
 - `switch`：原子替换 live 凭证（Windows: `~/.claude/.credentials.json`，macOS: Keychain `Claude Code-credentials`），同时把账号状态字段写回 `~/.claude.json`
 - 切换后调用 `/api/oauth/usage` 和 `/api/oauth/profile`，清除本地缓存，让状态栏立即显示新账号信息
+- 切换/退出前，自动把当前 live credentials 回写到「正要被切走」的账号快照。原因：Anthropic 每次 refresh 都会轮换 refresh_token，旧 token 立即作废；如果不回写，下次再切回这个账号会直接 401，需要重新登录
 
 ## 平台差异
 
@@ -72,6 +73,7 @@ ccs <name>                切换到指定账号（switch 的简写）
 ccs -                     清除当前登录状态（同 clear-current / logout）
 ccs import <name> [path]  将当前 credentials 导入为 <name>
 ccs switch <name>         切换到已导入的账号
+ccs sync                  把 live credentials 回写到当前活跃账号的快照
 ccs remove <name>         删除已导入的账号
 ccs clear-current         清除 live credentials，清空账号状态字段
 ccs logout                同 clear-current
@@ -134,6 +136,20 @@ export CLAUDE_HOME=/tmp/claude
 ccs status
 ```
 
+## 主动刷新 token
+
+`scripts/refresh-token.js` 调用 Anthropic OAuth refresh 端点，把当前 OAuth access token 续期 8 小时，并把新 credentials 同时写入 live 和 ccs 快照：
+
+```bash
+node scripts/refresh-token.js
+```
+
+适用场景：
+- 长期不切换的账号担心 refresh_token 临近 30 天滑动窗口失效时主动续命
+- 验证 share sync 跨端 token 同步链路
+
+注意：每次刷新会 rotate refresh_token，旧 refresh_token 立即作废。两端 share sync 启用时，本端刷完后应立刻触发同步推到对端，否则对端持有的旧 refresh_token 会失效。
+
 ## 状态栏脚本
 
 `scripts/statusline-command.sh` 是 Claude Code 状态栏脚本，输出三行信息：
@@ -168,6 +184,8 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.0**：多端共享同步（Windows ↔ WSL/Linux）。两端 ccs web 通过 HTTP 互访，按账号粒度同步整个 ccs 账号库（OAuth + API Key），同步前自动把 live 数据回写到当前 active 账号快照。`updatedAt` 决定方向，hash 跳过相同账号；`activeAccount` 和账号删除不同步，各端独立。预共享 Bearer 密钥鉴权；可绑定 0.0.0.0 监听 LAN，启用后 web 服务常驻不退 idle。Web UI 加版本号显示和「关闭服务」按钮，移除「同步快照」按钮和有效/过期徽章
+- **v3.6.0**：切换/退出前自动同步 live credentials 到 active 快照，避免 Anthropic refresh token 轮换后旧快照失效；新增 `ccs sync` 命令和 Web UI「同步快照」按钮；Web 启动时自动同步一次
 - **v3.5.0**：Web UI 新增「退出当前账号」按钮
 - **v3.4.0**：Web 服务 5 分钟空闲自动退出
 - **v3.3.1**：活跃 OAuth 账号显示从 live credentials 实时读取，反映 token 自动续期
