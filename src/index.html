@@ -511,6 +511,7 @@ function switchTab(tab) {
   document.getElementById('tab-apikey').classList.toggle('active', tab === 'apikey');
 }
 
+// 全量加载：仅在初始进入和保存成功后调用，会重写 input value
 async function loadShareConfig() {
   try {
     const r = await fetch('/api/share/config');
@@ -525,35 +526,50 @@ async function loadShareConfig() {
     secretInput.value = '';
     secretInput.placeholder = c.secret ? `当前已设置（${c.secret}）｜ 留空保持不变 ｜ 输入新值则更换` : '留空自动生成 / 两端必须相同';
     document.getElementById('share-interval').value = c.intervalMs || 30000;
-    const badge = document.getElementById('share-running-badge');
-    if (data.running) {
-      badge.textContent = '● 主动同步中（定时轮询对端）';
-      badge.style.color = 'var(--green)';
-    } else if (c.enabled && !c.peerUrl) {
-      badge.textContent = '● 被动响应方（等待对端访问）';
-      badge.style.color = 'var(--blue, #3b82f6)';
-    } else if (c.enabled) {
-      badge.textContent = '○ 已启用但未运行';
-      badge.style.color = 'var(--text-dim)';
-    } else {
-      badge.textContent = '';
-    }
-    const status = document.getElementById('share-status');
-    if (c.lastSyncAt) {
-      const d = new Date(c.lastSyncAt);
-      let summary = '— 无变化';
-      if (c.lastResult) {
-        const { pulled = 0, pushed = 0 } = c.lastResult;
-        if (pulled || pushed) summary = `⬇ 拉取 ${pulled} ｜ ⬆ 推送 ${pushed}`;
-      }
-      const err = c.lastError ? ` ｜ 错误: ${c.lastError}` : '';
-      status.textContent = `上次同步: ${d.toLocaleString()} ｜ ${summary}${err}`;
-      status.style.color = c.lastError ? 'var(--red)' : 'var(--text-dim)';
-    } else {
-      status.textContent = '尚未同步';
-    }
+    applyShareStatusUI(data);
   } catch (e) {
     console.warn('share config load failed', e);
+  }
+}
+
+// 只更新只读区域（badge + status），不动 input value，定时刷新用这个
+async function loadShareStatus() {
+  try {
+    const r = await fetch('/api/share/config');
+    const data = await r.json();
+    if (!data.ok) return;
+    applyShareStatusUI(data);
+  } catch { /* ignore */ }
+}
+
+function applyShareStatusUI(data) {
+  const c = data.config;
+  const badge = document.getElementById('share-running-badge');
+  if (data.running) {
+    badge.textContent = '● 主动同步中（定时轮询对端）';
+    badge.style.color = 'var(--green)';
+  } else if (c.enabled && !c.peerUrl) {
+    badge.textContent = '● 被动响应方（等待对端访问）';
+    badge.style.color = 'var(--blue, #3b82f6)';
+  } else if (c.enabled) {
+    badge.textContent = '○ 已启用但未运行';
+    badge.style.color = 'var(--text-dim)';
+  } else {
+    badge.textContent = '';
+  }
+  const status = document.getElementById('share-status');
+  if (c.lastSyncAt) {
+    const d = new Date(c.lastSyncAt);
+    let summary = '— 无变化';
+    if (c.lastResult) {
+      const { pulled = 0, pushed = 0 } = c.lastResult;
+      if (pulled || pushed) summary = `⬇ 拉取 ${pulled} ｜ ⬆ 推送 ${pushed}`;
+    }
+    const err = c.lastError ? ` ｜ 错误: ${c.lastError}` : '';
+    status.textContent = `上次同步: ${d.toLocaleString()} ｜ ${summary}${err}`;
+    status.style.color = c.lastError ? 'var(--red)' : 'var(--text-dim)';
+  } else {
+    status.textContent = '尚未同步';
   }
 }
 
@@ -804,7 +820,7 @@ load();
 loadVersion();
 loadShareConfig();
 setInterval(() => load(), 30000);
-setInterval(() => loadShareConfig(), 30000);
+setInterval(() => loadShareStatus(), 30000);
 </script>
 </body>
 </html>
