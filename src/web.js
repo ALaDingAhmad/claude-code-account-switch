@@ -264,7 +264,9 @@ function startWebServer(port, openBrowser) {
 
   const cfg = share.getShareConfig();
   const bind = (cfg?.enabled && cfg.bindAddress) ? cfg.bindAddress : '127.0.0.1';
-  server.listen(port, bind, () => {
+  const MAX_PORT_RETRY = 20;
+
+  function onListen(actualPort) {
     resetIdle();
     try {
       const r = new AccountStore().syncActive();
@@ -274,13 +276,16 @@ function startWebServer(port, openBrowser) {
     }
     if (cfg?.enabled) share.startDaemon();
     writeWebPid({
-      port,
+      port: actualPort,
       bind,
       shareEnabled: !!cfg?.enabled,
       sharePeerUrl: cfg?.peerUrl || '',
     });
-    const url = `http://${bind === '0.0.0.0' ? '127.0.0.1' : bind}:${port}`;
+    const url = `http://${bind === '0.0.0.0' ? '127.0.0.1' : bind}:${actualPort}`;
     const role = cfg?.enabled ? (cfg.peerUrl ? 'share-sync ACTIVE, no idle timeout' : 'share-sync PASSIVE, no idle timeout') : 'idle ' + (IDLE_TIMEOUT_MS / 60000) + ' min';
+    if (actualPort !== port) {
+      console.log(`Port ${port} was in use, switched to ${actualPort}.`);
+    }
     console.log(`CCS web UI running at ${url}  (bind=${bind}, ${role})`);
     console.log('Press Ctrl+C to stop.');
     if (openBrowser) {
@@ -289,16 +294,31 @@ function startWebServer(port, openBrowser) {
         execSync(openCmd, { windowsHide: true, stdio: 'ignore' });
       } catch { /* ignore */ }
     }
-  });
+  }
 
-  server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-      console.error(`Port ${port} is already in use. Try: ccs web <port>`);
-    } else {
-      console.error(e.message);
-    }
-    process.exit(1);
-  });
+  function tryListen(p) {
+    const onErr = (e) => {
+      server.removeListener('listening', onOk);
+      if (e.code === 'EADDRINUSE' && p < port + MAX_PORT_RETRY) {
+        return tryListen(p + 1);
+      }
+      if (e.code === 'EADDRINUSE') {
+        console.error(`No free port in range ${port}-${port + MAX_PORT_RETRY}.`);
+      } else {
+        console.error(e.message);
+      }
+      process.exit(1);
+    };
+    const onOk = () => {
+      server.removeListener('error', onErr);
+      onListen(p);
+    };
+    server.once('error', onErr);
+    server.once('listening', onOk);
+    server.listen(p, bind);
+  }
+
+  tryListen(port);
 }
 
 function readBody(req) {
