@@ -185,12 +185,12 @@ async function shareSyncNow() {
   else console.log(`同步完成：拉取 ${r.pulled || 0}，推送 ${r.pushed || 0}`);
 }
 
-function cmdWeb(rest) {
+async function cmdWeb(rest) {
   let isShare = false;
   if (rest[0] === 'share') { isShare = true; rest = rest.slice(1); }
 
   let port = WEB_DEFAULT_PORT;
-  let peer = null;     // null = 未传；'' = 显式清空
+  let peer = null;
   let bind = null;
   for (let i = 0; i < rest.length; i++) {
     const k = rest[i];
@@ -206,13 +206,44 @@ function cmdWeb(rest) {
   if (isShare) {
     const cur = share.getShareConfig() || {};
     const patch = { enabled: true };
-    if (peer !== null) patch.peerUrl = peer;        // 命令行显式传了 --peer 才覆盖
+    if (peer !== null) patch.peerUrl = peer;
     if (bind !== null) patch.bindAddress = bind;
     else if (!cur.bindAddress) patch.bindAddress = '0.0.0.0';
     share.setShareConfig(patch);
+    return spawnDetachedWeb(port);
   }
 
-  startWebServer(port, !isShare, isShare ? printShareInvite : null);
+  startWebServer(port, true, null);
+}
+
+async function spawnDetachedWeb(port) {
+  const { spawn } = require('child_process');
+  const { CCS_DIR, readWebPid } = require(path.join(__dirname, '..', 'src', 'utils'));
+  const logPath = path.join(CCS_DIR, 'web.log');
+  const out = fs.openSync(logPath, 'a');
+  const err = fs.openSync(logPath, 'a');
+  const child = spawn(process.execPath, [__filename, 'web', String(port)], {
+    detached: true,
+    stdio: ['ignore', out, err],
+    windowsHide: true,
+  });
+  child.unref();
+
+  // 轮询 web.pid，等 web 启动完成（最多 10 秒）
+  let info = null;
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    const cur = readWebPid();
+    if (cur && cur.pid === child.pid) { info = cur; break; }
+  }
+  if (!info) {
+    console.error(`Failed to confirm web start within 10s. Check log: ${logPath}`);
+    process.exit(1);
+  }
+  printShareInvite(info.port, info.bind);
+  console.log(`Background PID : ${child.pid}`);
+  console.log(`Log file       : ${logPath}`);
+  console.log(`停止服务       : kill ${child.pid}  或调用 POST http://127.0.0.1:${info.port}/api/shutdown`);
 }
 
 function printShareInvite(actualPort, bindAddr) {
