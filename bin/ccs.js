@@ -190,7 +190,7 @@ function cmdWeb(rest) {
   if (rest[0] === 'share') { isShare = true; rest = rest.slice(1); }
 
   let port = WEB_DEFAULT_PORT;
-  let peer = '';
+  let peer = null;     // null = 未传；'' = 显式清空
   let bind = null;
   for (let i = 0; i < rest.length; i++) {
     const k = rest[i];
@@ -204,8 +204,11 @@ function cmdWeb(rest) {
   }
 
   if (isShare) {
-    const patch = { enabled: true, bindAddress: bind || '0.0.0.0' };
-    if (peer) patch.peerUrl = peer;
+    const cur = share.getShareConfig() || {};
+    const patch = { enabled: true };
+    if (peer !== null) patch.peerUrl = peer;        // 命令行显式传了 --peer 才覆盖
+    if (bind !== null) patch.bindAddress = bind;
+    else if (!cur.bindAddress) patch.bindAddress = '0.0.0.0';
     share.setShareConfig(patch);
   }
 
