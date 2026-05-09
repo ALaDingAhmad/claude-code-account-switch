@@ -155,13 +155,13 @@ function shareEnable(opts) {
   console.log('Share sync 已启用：');
   console.log(`  bind     : ${cfg.bindAddress}`);
   console.log(`  peer     : ${cfg.peerUrl || '(passive，被动方，等待对端访问)'}`);
-  console.log(`  secret   : ${cfg.secret}`);
   console.log(`  interval : ${cfg.intervalMs}ms`);
-  console.log('');
-  console.log('提示：在另一端用同样的 secret 启用 share，启动 ccs web 即可同步。');
   if (!cfg.peerUrl) {
-    console.log('当前为被动方，仅响应对端请求，不主动发起。');
+    console.log('  当前为被动方，仅响应对端请求，不主动发起。');
   }
+  console.log('');
+  console.log('Secret（复制到对端 --secret 参数）:');
+  console.log(cfg.secret);
 }
 
 function shareDisable() {
