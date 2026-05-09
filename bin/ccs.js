@@ -186,6 +186,7 @@ async function shareSyncNow() {
 }
 
 async function cmdWeb(rest) {
+  if (rest[0] === 'stop') return cmdWebStop();
   let isShare = false;
   if (rest[0] === 'share') { isShare = true; rest = rest.slice(1); }
 
@@ -243,7 +244,25 @@ async function spawnDetachedWeb(port) {
   printShareInvite(info.port, info.bind);
   console.log(`Background PID : ${child.pid}`);
   console.log(`Log file       : ${logPath}`);
-  console.log(`停止服务       : kill ${child.pid}  或调用 POST http://127.0.0.1:${info.port}/api/shutdown`);
+  console.log(`停止服务       : ccs web stop`);
+  console.log(`               或: curl -X POST http://127.0.0.1:${info.port}/api/shutdown`);
+  console.log(`               或: kill ${child.pid}`);
+}
+
+function cmdWebStop() {
+  const { readWebPid } = require(path.join(__dirname, '..', 'src', 'utils'));
+  const info = readWebPid();
+  if (!info) {
+    console.log('No running ccs web service.');
+    return;
+  }
+  try {
+    process.kill(info.pid, 'SIGTERM');
+    console.log(`Stopped ccs web (PID ${info.pid}, was running on ${info.bind}:${info.port}).`);
+  } catch (e) {
+    console.error(`Failed to stop PID ${info.pid}: ${e.message}`);
+    process.exit(1);
+  }
 }
 
 function printShareInvite(actualPort, bindAddr) {
@@ -400,6 +419,7 @@ Usage:
   ccs web [port]            start web UI (default port 7899)
   ccs web share [port] [--peer URL] [--bind ADDR]
                             start web UI with share-sync enabled, print URL+Secret
+  ccs web stop              stop the running ccs web (kills via pid file)
   ccs share status                   show share-sync config
   ccs share enable [options]         enable share-sync (--peer URL --secret X --bind A --interval MS)
   ccs share disable                  disable share-sync, clear secret
