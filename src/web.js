@@ -9,7 +9,7 @@ const share = require('./share');
 const HTML_PATH = path.join(__dirname, 'index.html');
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
-function startWebServer(port, openBrowser) {
+function startWebServer(port, openBrowser, onReady) {
   let idleTimer = null;
   const cancelIdle = () => {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -294,6 +294,7 @@ function startWebServer(port, openBrowser) {
         execSync(openCmd, { windowsHide: true, stdio: 'ignore' });
       } catch { /* ignore */ }
     }
+    if (typeof onReady === 'function') onReady(actualPort, bind);
   }
 
   function tryListen(p) {

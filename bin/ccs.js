@@ -186,11 +186,60 @@ async function shareSyncNow() {
 }
 
 function cmdWeb(rest) {
-  const port = rest[0] ? parseInt(rest[0], 10) : WEB_DEFAULT_PORT;
-  if (isNaN(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid port: ${rest[0]}`);
+  let isShare = false;
+  if (rest[0] === 'share') { isShare = true; rest = rest.slice(1); }
+
+  let port = WEB_DEFAULT_PORT;
+  let peer = '';
+  let bind = null;
+  for (let i = 0; i < rest.length; i++) {
+    const k = rest[i];
+    if (/^\d+$/.test(k)) port = parseInt(k, 10);
+    else if (k === '--peer') { peer = rest[++i] || ''; }
+    else if (k === '--bind') { bind = rest[++i] || null; }
+    else throw new Error(`unknown option: ${k}`);
   }
-  startWebServer(port, true);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid port: ${port}`);
+  }
+
+  if (isShare) {
+    const patch = { enabled: true, bindAddress: bind || '0.0.0.0' };
+    if (peer) patch.peerUrl = peer;
+    share.setShareConfig(patch);
+  }
+
+  startWebServer(port, !isShare, isShare ? printShareInvite : null);
+}
+
+function printShareInvite(actualPort, bindAddr) {
+  const cfg = share.getShareConfig();
+  const ip = bindAddr === '0.0.0.0' ? getLocalIPv4() : (bindAddr || '127.0.0.1');
+  const url = `http://${ip}:${actualPort}`;
+  console.log('');
+  console.log('=== 共享同步信息 ===');
+  console.log(`URL    : ${url}`);
+  console.log(`Secret : ${cfg.secret}`);
+  console.log(`角色   : ${cfg.peerUrl ? '主动方（轮询 ' + cfg.peerUrl + '）' : '被动方（等待对端访问）'}`);
+  console.log('');
+  console.log('在对端执行（任选其一）：');
+  console.log(`  ccs share enable --peer ${url} --secret ${cfg.secret}`);
+  console.log(`  ccs web        # 启动对端 web 后自动同步`);
+  console.log('');
+}
+
+function getLocalIPv4() {
+  const os = require('os');
+  const cands = [];
+  for (const ifaces of Object.values(os.networkInterfaces() || {})) {
+    for (const a of ifaces || []) {
+      if (a.family === 'IPv4' && !a.internal) cands.push(a.address);
+    }
+  }
+  // 优先 LAN 真实网段：192.168.* > 10.* > 其他 > 172.x（多为 WSL/Docker 虚拟）
+  const score = (ip) => ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : ip.startsWith('172.') ? 3 : 2;
+  cands.sort((a, b) => score(a) - score(b));
+  return cands[0] || '127.0.0.1';
 }
 
 function cmdDoctor() {
@@ -315,6 +364,8 @@ Usage:
   ccs accounts              list imported accounts
   ccs doctor                check environment and config
   ccs web [port]            start web UI (default port 7899)
+  ccs web share [port] [--peer URL] [--bind ADDR]
+                            start web UI with share-sync enabled, print URL+Secret
   ccs share status                   show share-sync config
   ccs share enable [options]         enable share-sync (--peer URL --secret X --bind A --interval MS)
   ccs share disable                  disable share-sync, clear secret
