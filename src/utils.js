@@ -153,17 +153,23 @@ const IS_MAC = process.platform === 'darwin';
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const KEYCHAIN_ACCOUNT = os.userInfo().username;
 
+// macOS keychain 操作统一走 spawnSync + args 数组，避免 shell 解析造成的 $/反引号 注入
+function keychainExec(args, opts = {}) {
+  const { spawnSync } = require('child_process');
+  return spawnSync('security', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...opts,
+  });
+}
+
 function readLiveCredentials() {
   if (IS_MAC) {
-    try {
-      const out = execSync(
-        `security find-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}" -w`,
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
-      ).trim();
-      return out ? JSON.parse(out) : null;
-    } catch {
-      return null;
-    }
+    const r = keychainExec(['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w']);
+    if (r.status !== 0) return null;
+    const out = (r.stdout || '').trim();
+    if (!out) return null;
+    try { return JSON.parse(out); } catch { return null; }
   }
   if (!fs.existsSync(CREDENTIALS_PATH)) return null;
   try { return readJson(CREDENTIALS_PATH); } catch { return null; }
@@ -172,10 +178,16 @@ function readLiveCredentials() {
 function writeLiveCredentials(json) {
   const content = JSON.stringify(json);
   if (IS_MAC) {
-    execSync(
-      `security add-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}" -w ${JSON.stringify(content)} -U`,
-      { stdio: ['ignore', 'ignore', 'pipe'] }
-    );
+    const r = keychainExec([
+      'add-generic-password',
+      '-s', KEYCHAIN_SERVICE,
+      '-a', KEYCHAIN_ACCOUNT,
+      '-w', content,
+      '-U',
+    ]);
+    if (r.status !== 0) {
+      throw new Error(`keychain write failed: ${(r.stderr || '').toString().trim() || `exit ${r.status}`}`);
+    }
     return;
   }
   atomicWriteJson(CREDENTIALS_PATH, json);
@@ -183,12 +195,7 @@ function writeLiveCredentials(json) {
 
 function deleteLiveCredentials() {
   if (IS_MAC) {
-    try {
-      execSync(
-        `security delete-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}"`,
-        { stdio: ['ignore', 'ignore', 'ignore'] }
-      );
-    } catch { /* not present */ }
+    keychainExec(['delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT]);
     return;
   }
   try { if (fs.existsSync(CREDENTIALS_PATH)) fs.unlinkSync(CREDENTIALS_PATH); } catch { /* ignore */ }
@@ -196,13 +203,8 @@ function deleteLiveCredentials() {
 
 function liveCredentialsExist() {
   if (IS_MAC) {
-    try {
-      execSync(
-        `security find-generic-password -s "${KEYCHAIN_SERVICE}" -a "${KEYCHAIN_ACCOUNT}"`,
-        { stdio: ['ignore', 'ignore', 'ignore'] }
-      );
-      return true;
-    } catch { return false; }
+    const r = keychainExec(['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT]);
+    return r.status === 0;
   }
   return fs.existsSync(CREDENTIALS_PATH);
 }
