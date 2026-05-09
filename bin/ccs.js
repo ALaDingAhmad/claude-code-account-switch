@@ -163,6 +163,12 @@ function printRuntimeInfo() {
 
 function printAccountSummary(prefix, account) {
   console.log(prefix);
+  if (account.type === 'apikey') {
+    console.log(`  Type         : API Key`);
+    console.log(`  Token        : ${account.authTokenMasked || 'N/A'}`);
+    if (account.baseUrl) console.log(`  Base URL     : ${account.baseUrl}`);
+    return;
+  }
   console.log(`  Subscription : ${account.subscriptionType}`);
   console.log(`  Token        : ${account.accessTokenMasked}`);
   if (account.displayName || account.emailAddress) {
@@ -176,13 +182,19 @@ function printStatus(status) {
   console.log(`Active account    : ${status.activeAccount || 'none'}`);
   console.log(`Imported accounts : ${status.accountCount}`);
   if (status.active) {
-    console.log(`Subscription      : ${status.active.subscriptionType}`);
-    console.log(`Token             : ${status.active.accessTokenMasked}`);
-    if (status.active.displayName || status.active.emailAddress) {
-      console.log(`Identity          : ${status.active.displayName || 'unknown'} <${status.active.emailAddress || 'unknown'}>`);
+    if (status.active.type === 'apikey') {
+      console.log(`Type              : API Key`);
+      console.log(`Token             : ${status.active.authTokenMasked || 'N/A'}`);
+      if (status.active.baseUrl) console.log(`Base URL          : ${status.active.baseUrl}`);
+    } else {
+      console.log(`Subscription      : ${status.active.subscriptionType}`);
+      console.log(`Token             : ${status.active.accessTokenMasked}`);
+      if (status.active.displayName || status.active.emailAddress) {
+        console.log(`Identity          : ${status.active.displayName || 'unknown'} <${status.active.emailAddress || 'unknown'}>`);
+      }
+      if (status.active.organizationName) console.log(`Organization      : ${status.active.organizationName}`);
+      console.log(`Expires           : ${status.active.expiresIn}`);
     }
-    if (status.active.organizationName) console.log(`Organization      : ${status.active.organizationName}`);
-    console.log(`Expires           : ${status.active.expiresIn}`);
   }
 }
 
@@ -192,7 +204,14 @@ function printAccounts(accounts) {
 
   for (const name of names) {
     const a = accounts[name];
-    console.log(`${name}${a.isActive ? ' [active]' : ''}`);
+    const tag = a.isActive ? ' [active]' : '';
+    if (a.type === 'apikey') {
+      console.log(`${name}${tag} (API Key)`);
+      console.log(`  Token        : ${a.authTokenMasked || 'N/A'}`);
+      if (a.baseUrl) console.log(`  Base URL     : ${a.baseUrl}`);
+      continue;
+    }
+    console.log(`${name}${tag}`);
     console.log(`  Subscription : ${a.subscriptionType}`);
     console.log(`  Token        : ${a.accessTokenMasked}`);
     if (a.displayName || a.emailAddress) {
