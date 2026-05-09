@@ -520,7 +520,10 @@ async function loadShareConfig() {
     document.getElementById('share-enabled').checked = !!c.enabled;
     document.getElementById('share-bind').value = c.bindAddress || '127.0.0.1';
     document.getElementById('share-peer').value = c.peerUrl || '';
-    document.getElementById('share-secret').value = c.secret || '';
+    // secret 字段不显示真值（避免 mask 被当真值回写）；input 留空，placeholder 提示
+    const secretInput = document.getElementById('share-secret');
+    secretInput.value = '';
+    secretInput.placeholder = c.secret ? `当前已设置（${c.secret}）｜ 留空保持不变 ｜ 输入新值则更换` : '留空自动生成 / 两端必须相同';
     document.getElementById('share-interval').value = c.intervalMs || 30000;
     const badge = document.getElementById('share-running-badge');
     if (data.running) {
@@ -563,9 +566,11 @@ async function saveShareConfig() {
     enabled: document.getElementById('share-enabled').checked,
     bindAddress: document.getElementById('share-bind').value.trim() || '127.0.0.1',
     peerUrl: document.getElementById('share-peer').value.trim(),
-    secret: document.getElementById('share-secret').value.trim(),
     intervalMs: parseInt(document.getElementById('share-interval').value, 10) || 30000,
   };
+  // 仅当用户输入了新 secret 时才提交；否则保留后端现有 secret
+  const secretRaw = document.getElementById('share-secret').value.trim();
+  if (secretRaw) body.secret = secretRaw;
   try {
     const r = await fetch('/api/share/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
