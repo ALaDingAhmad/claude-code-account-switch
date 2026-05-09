@@ -401,31 +401,37 @@ function printAccounts(accounts) {
 
 function printHelp() {
   console.log(`
-CCS - Claude Code account switcher
+CCS - Claude Code 多账号切换工具
 
-Usage:
-  ccs                       show status and imported accounts
-  ccs <name>                switch to account <name>
-  ccs -                     clear current login state
-  ccs import <name> [path]  import current credentials as <name>
-  ccs switch <name>         switch to account <name>
-  ccs remove <name>         delete an imported account
-  ccs clear-current         remove live credentials and clear account state
-  ccs logout                alias for clear-current
-  ccs sync                  capture live credentials into the active snapshot
-  ccs status                show current status
-  ccs accounts              list imported accounts
-  ccs doctor                check environment and config
-  ccs web [port]            start web UI (default port 7899)
+总览：
+  ccs                                显示当前状态、账号列表、web/share 运行信息
+  ccs <name>                         切换到账号 <name>（switch 简写）
+  ccs -                              清除当前登录状态（同 logout）
+  ccs -h / --help                    显示帮助
+
+账号管理：
+  ccs import <name> [path]           将当前 live credentials 导入为 <name>
+  ccs switch <name>                  切换到指定账号
+  ccs remove <name>                  删除已导入的账号
+  ccs accounts                       列出所有已导入账号
+  ccs status                         显示当前活跃账号状态
+  ccs sync                           把 live credentials 回写到当前 active 快照
+  ccs clear-current / logout         清除 live credentials 和账号状态字段
+  ccs doctor                         检查环境和配置
+
+Web 服务：
+  ccs web [port]                     前台启动 web UI（默认 7899，端口被占自动 +1）
   ccs web share [port] [--peer URL] [--bind ADDR]
-                            start web UI with share-sync enabled, print URL+Secret
-  ccs web stop              stop the running ccs web (kills via pid file)
-  ccs share status                   show share-sync config
-  ccs share enable [options]         enable share-sync (--peer URL --secret X --bind A --interval MS)
-  ccs share disable                  disable share-sync, clear secret
-  ccs share secret                   print current secret in plain text
-  ccs share sync                     trigger one sync round now
-  ccs -h / --help           show this help
+                                     后台启动 web UI 并启用共享同步，打印 URL/Secret
+  ccs web stop                       停止后台 web 服务
+
+共享同步（CLI 配置）：
+  ccs share status                   查看 share-sync 配置和上次同步结果
+  ccs share enable [opts]            启用 share-sync
+                                     opts: --peer URL --secret X --bind ADDR --interval MS
+  ccs share disable                  禁用 share-sync 并清除 secret
+  ccs share secret                   输出明文 secret（用于复制到对端）
+  ccs share sync                     立即触发一轮同步
 `);
 }
 
