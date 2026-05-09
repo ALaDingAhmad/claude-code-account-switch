@@ -1,7 +1,7 @@
 {
   "name": "claude-code-account-switch",
-  "version": "3.7.1",
-  "description": "Claude Code account switcher for Windows using credential snapshot restore",
+  "version": "3.7.2",
+  "description": "Claude Code 多账号切换工具，支持 Windows/macOS/Linux/WSL，OAuth + API Key 双模式，多端 web 共享同步",
   "bin": {
     "ccs": "bin/ccs.js"
   },
@@ -13,13 +13,25 @@
   },
   "keywords": [
     "claude",
+    "claude-code",
     "account",
     "switch",
-    "windows",
-    "credentials"
+    "switcher",
+    "credentials",
+    "oauth",
+    "keychain",
+    "wsl"
   ],
   "license": "MIT",
   "author": "baiqiang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitee.com/superas/claude-code-account-switch.git"
+  },
+  "homepage": "https://gitee.com/superas/claude-code-account-switch",
+  "bugs": {
+    "url": "https://gitee.com/superas/claude-code-account-switch/issues"
+  },
   "files": [
     "bin/",
     "src/",

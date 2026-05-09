@@ -256,6 +256,7 @@ node scripts/refresh-token.js
 
 ## 版本变更
 
+- **v3.7.2**：package.json 元信息完善（description 反映多平台支持，加 repository/homepage/bugs 字段，扩展 keywords）
 - **v3.7.1**：v3.7.0 后续打磨
   - `ccs web share` 改为后台模式（spawn detached），启动后立即返回终端，打印 PID 和停止方法
   - `ccs web stop` 命令读 pid 文件 SIGTERM
