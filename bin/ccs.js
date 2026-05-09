@@ -25,7 +25,7 @@ const WEB_DEFAULT_PORT = 7899;
 
 const COMMANDS = new Set([
   'import', 'switch', 'status', 'accounts',
-  'clear-current', 'logout', 'remove', 'doctor', 'web', 'sync',
+  'clear-current', 'logout', 'remove', 'doctor', 'web', 'sync', 'share',
 ]);
 
 async function main() {
@@ -60,6 +60,7 @@ async function dispatch(cmd, rest) {
     case 'doctor':       return cmdDoctor();
     case 'web':          return cmdWeb(rest);
     case 'sync':         return cmdSync();
+    case 'share':        return cmdShare(rest);
   }
 }
 
@@ -108,6 +109,80 @@ function cmdSync() {
   } else {
     console.log(`Sync skipped: ${result.reason}.`);
   }
+}
+
+async function cmdShare(rest) {
+  const sub = rest[0] || 'status';
+  if (sub === 'status') return shareStatus();
+  if (sub === 'enable') return shareEnable(rest.slice(1));
+  if (sub === 'disable') return shareDisable();
+  if (sub === 'secret') return shareShowSecret();
+  if (sub === 'sync') return shareSyncNow();
+  throw new Error(
+    'Usage: ccs share <status|enable|disable|secret|sync> [options]\n' +
+    '  enable [--peer URL] [--secret X] [--bind 127.0.0.1|0.0.0.0] [--interval MS]'
+  );
+}
+
+function shareStatus() {
+  const cfg = share.getShareConfig() || share.defaultShareConfig();
+  console.log('Share sync 配置：');
+  console.log(`  enabled   : ${cfg.enabled}`);
+  console.log(`  bind      : ${cfg.bindAddress}`);
+  console.log(`  peer      : ${cfg.peerUrl || '(passive，被动方)'}`);
+  console.log(`  secret    : ${cfg.secret ? cfg.secret.slice(0, 6) + '...' + cfg.secret.slice(-4) : '(empty)'}`);
+  console.log(`  interval  : ${cfg.intervalMs}ms`);
+  console.log(`  last sync : ${cfg.lastSyncAt || 'never'}`);
+  if (cfg.lastResult) {
+    console.log(`  last result: pulled=${cfg.lastResult.pulled || 0}, pushed=${cfg.lastResult.pushed || 0}`);
+  }
+  if (cfg.lastError) {
+    console.log(`  last error: ${cfg.lastError}`);
+  }
+}
+
+function shareEnable(opts) {
+  const patch = { enabled: true };
+  for (let i = 0; i < opts.length; i++) {
+    const k = opts[i], v = opts[i + 1];
+    if (k === '--peer') { patch.peerUrl = v || ''; i++; }
+    else if (k === '--secret') { patch.secret = v || ''; i++; }
+    else if (k === '--bind') { patch.bindAddress = v || '127.0.0.1'; i++; }
+    else if (k === '--interval') { patch.intervalMs = parseInt(v, 10) || 30000; i++; }
+    else throw new Error(`unknown option: ${k}`);
+  }
+  const cfg = share.setShareConfig(patch);
+  console.log('Share sync 已启用：');
+  console.log(`  bind     : ${cfg.bindAddress}`);
+  console.log(`  peer     : ${cfg.peerUrl || '(passive，被动方，等待对端访问)'}`);
+  console.log(`  secret   : ${cfg.secret}`);
+  console.log(`  interval : ${cfg.intervalMs}ms`);
+  console.log('');
+  console.log('提示：在另一端用同样的 secret 启用 share，启动 ccs web 即可同步。');
+  if (!cfg.peerUrl) {
+    console.log('当前为被动方，仅响应对端请求，不主动发起。');
+  }
+}
+
+function shareDisable() {
+  share.setShareConfig({ enabled: false, peerUrl: '', secret: '' });
+  console.log('Share sync 已禁用，secret 和 peer URL 已清除。');
+}
+
+function shareShowSecret() {
+  const cfg = share.getShareConfig();
+  if (!cfg?.secret) {
+    console.log('(没有 secret，请先 ccs share enable)');
+    return;
+  }
+  console.log(cfg.secret);
+}
+
+async function shareSyncNow() {
+  const r = await share.syncOnce((m) => console.log(`[share] ${m}`));
+  if (r.skipped) console.log(`跳过: ${r.skipped}`);
+  else if (r.error) console.log(`错误: ${r.error}`);
+  else console.log(`同步完成：拉取 ${r.pulled || 0}，推送 ${r.pushed || 0}`);
 }
 
 function cmdWeb(rest) {
@@ -240,6 +315,11 @@ Usage:
   ccs accounts              list imported accounts
   ccs doctor                check environment and config
   ccs web [port]            start web UI (default port 7899)
+  ccs share status                   show share-sync config
+  ccs share enable [options]         enable share-sync (--peer URL --secret X --bind A --interval MS)
+  ccs share disable                  disable share-sync, clear secret
+  ccs share secret                   print current secret in plain text
+  ccs share sync                     trigger one sync round now
   ccs -h / --help           show this help
 `);
 }

@@ -136,6 +136,43 @@ export CLAUDE_HOME=/tmp/claude
 ccs status
 ```
 
+## 多端共享同步
+
+两端 ccs web 通过 HTTP 互访同步整个账号库（OAuth + API Key）。按账号粒度比较 hash + updatedAt 决定同步方向。`activeAccount` 和账号删除不同步，各端独立。
+
+### 配置方式
+
+**Web UI**（Windows / 桌面环境）：访问 web 页面下方的「多端共享同步」区域勾选启用。
+
+**CLI**（Linux/WSL 无浏览器场景）：
+
+```bash
+# A 端（主动方，定时轮询对端）
+ccs share enable --peer http://192.168.1.50:7899 --bind 0.0.0.0
+ccs share secret      # 复制输出的 secret
+
+# B 端（被动方，仅响应请求）
+ccs share enable --secret <粘贴上面的 secret> --bind 0.0.0.0
+
+# 两端各自启动 web，启用 share 后 web 不退 idle，常驻接收请求
+ccs web 7899
+
+# 查看配置
+ccs share status
+
+# 立即触发一次同步（主动方）
+ccs share sync
+```
+
+**只需一端填 `--peer`**，另一端留空即可（被动响应）。两端 secret 必须一致。
+
+### 注意
+
+- 每次 OAuth refresh 会 rotate refresh_token，旧的立即作废。两端共享时，本端刷完后必须及时同步推到对端，否则对端持有的旧 refresh_token 会失效
+- 凭证走 LAN 明文（仅 Bearer 鉴权），仅建议同一可信网络内使用
+- 启用 share 后 web 不退 idle，需 Ctrl+C 或调 `/api/shutdown` 停止
+- macOS 端不支持作为 share 节点（OAuth 凭证在 keychain，不便跨端比对）
+
 ## 主动刷新 token
 
 `scripts/refresh-token.js` 调用 Anthropic OAuth refresh 端点，把当前 OAuth access token 续期 8 小时，并把新 credentials 同时写入 live 和 ccs 快照：
