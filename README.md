@@ -206,7 +206,7 @@ ccs web stop              # 停止后台 web
 - 每次 OAuth refresh 会 rotate refresh_token，旧的立即作废。两端共享时本端刷完后会自动通过 share sync 推到对端；如果同步链路断开期间发生 refresh，对端持有的旧 refresh_token 会失效
 - 凭证走 LAN 明文（仅 Bearer 鉴权），仅建议同一可信网络内使用
 - 启用 share 后 web 不退 idle，需 `ccs web stop` 或访问 `/api/shutdown` 停止
-- macOS 端不支持作为 share 节点（OAuth 凭证在 keychain，不便跨端比对）
+- macOS 端理论支持作为 share 节点（CCS 通过 `security` CLI 读写 Keychain）。第一次接收同步会弹 Keychain 授权框，选「始终允许」后后续免确认。但未在真实多机环境验证过，遇到问题反馈
 
 ## 主动刷新 token
 
