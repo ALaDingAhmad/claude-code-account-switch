@@ -127,6 +127,7 @@ body {
 }
 .input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(99,102,241,.12); background: var(--white); }
 .input::placeholder { color: var(--text-muted); }
+select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='%236b7280' d='M6 8L0 0h12z'/></svg>"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; cursor: pointer; }
 
 /* Buttons */
 .btn {
@@ -327,7 +328,10 @@ body {
       </div>
       <div class="import-row">
         <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">本机绑定地址</div>
-        <input class="input" id="share-bind" type="text" placeholder="0.0.0.0 (LAN 可访问) / 127.0.0.1 (仅本机)" />
+        <select class="input" id="share-bind">
+          <option value="127.0.0.1">127.0.0.1（仅本机）</option>
+          <option value="0.0.0.0">0.0.0.0（LAN 可访问）</option>
+        </select>
       </div>
       <div class="import-row">
         <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">对端 URL</div>
