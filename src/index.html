@@ -258,10 +258,13 @@ body {
   <div class="header">
     <div class="logo">C</div>
     <div class="header-text">
-      <h1>CCS</h1>
+      <h1>CCS <span id="version-tag" style="font-size:13px;color:var(--text-dim);font-weight:400;margin-left:6px"></span></h1>
       <p>Claude Code Account Switcher</p>
     </div>
-    <div class="header-right" id="poll"></div>
+    <div class="header-right" style="display:flex;align-items:center;gap:10px">
+      <span id="poll"></span>
+      <button class="btn" onclick="shutdownWeb()" style="padding:6px 12px;font-size:12px">关闭服务</button>
+    </div>
   </div>
 
   <!-- Active account -->
@@ -304,6 +307,55 @@ body {
   <div class="section-label">已导入账号</div>
   <div id="accounts-section" class="account-list"></div>
 
+  <!-- Share Sync 设置 -->
+  <div class="section-label" style="margin-top:32px">多端共享同步</div>
+  <div class="import-card" id="share-section">
+    <p style="margin-bottom:14px;color:var(--text-dim);font-size:13px;line-height:1.6">
+      在 Windows 与 WSL（或两台 LAN 内的机器）各自启动 ccs web，通过 HTTP 互相同步登录凭证。
+      谁的 OAuth token 更新（expiresAt 更大），就把它推给另一端。
+      <br>
+      <b>只需一端填对端 URL</b>作为主动方（定时轮询），另一端留空 URL 作为被动方（仅响应请求）。两端密钥必须一致。
+      凭证走 LAN 明文传输，仅建议同一可信网络使用。
+    </p>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:14px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="share-enabled" onchange="onShareEnabledChange()" />
+          <span>启用共享同步</span>
+        </label>
+        <span id="share-running-badge" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+      <div class="import-row">
+        <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">本机绑定地址</div>
+        <input class="input" id="share-bind" type="text" placeholder="0.0.0.0 (LAN 可访问) / 127.0.0.1 (仅本机)" />
+      </div>
+      <div class="import-row">
+        <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">对端 URL</div>
+        <input class="input" id="share-peer" type="text" placeholder="http://其他机器IP:7899（留空 = 被动响应方）" />
+      </div>
+      <div class="import-row">
+        <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">共享密钥</div>
+        <input class="input" id="share-secret" type="text" placeholder="留空自动生成 / 两端必须相同" />
+        <button class="btn" onclick="copyShareSecret()">复制</button>
+      </div>
+      <div class="import-row">
+        <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">轮询间隔（毫秒）</div>
+        <input class="input" id="share-interval" type="number" min="5000" step="5000" placeholder="30000" />
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+        <div id="share-status" style="font-size:12px;color:var(--text-dim)"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" onclick="syncNow()">立即同步</button>
+          <button class="btn btn-accent" onclick="saveShareConfig()">保存</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.6;background:var(--bg-card);padding:10px;border-radius:6px;margin-top:8px">
+        ⚠️ 启用共享同步后，本进程不再自动 idle 退出，需要手动 Ctrl+C 关闭。<br>
+        ⚠️ 绑定 0.0.0.0 时，同 LAN 任何能猜到密钥的人都可读取/覆盖你的登录态，请保管好密钥。
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Edit Modal -->
@@ -333,13 +385,6 @@ function esc(s) {
   return d.innerHTML;
 }
 
-function expiredBadge(expiresAt) {
-  if (!expiresAt) return '';
-  return Date.now() > expiresAt
-    ? '<span class="badge badge-red">已过期</span>'
-    : '<span class="badge badge-green">有效</span>';
-}
-
 function render(data) {
   const { activeAccount, accounts } = data;
   allAccounts = accounts;
@@ -357,7 +402,6 @@ function render(data) {
           (isApiKey
             ? '<span class="hero-badge">API Key</span>'
             : (a.subscriptionType ? '<span class="hero-badge">' + esc(a.subscriptionType) + '</span>' : '')) +
-          (!isApiKey && a.expiresAt && Date.now() > a.expiresAt ? '<span class="hero-badge hero-badge-red">Token 已过期</span>' : '') +
         '</div>' +
         '<div class="active-hero-grid">' +
           (isApiKey
@@ -368,7 +412,7 @@ function render(data) {
               (a.organizationName ? '<div><div class="hero-field-label">组织</div><div class="hero-field-value">' + esc(a.organizationName) + '</div></div>' : '') +
               '<div><div class="hero-field-label">Token 到期</div><div class="hero-field-value">' + esc(a.expiresIn || 'unknown') + '</div></div>') +
         '</div>' +
-        '<div style="margin-top:18px;display:flex;justify-content:flex-end">' +
+        '<div style="margin-top:18px;display:flex;justify-content:flex-end;gap:10px">' +
           '<button class="btn" id="logout-btn" onclick="doLogout()" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)">退出当前账号</button>' +
         '</div>' +
       '</div>';
@@ -395,7 +439,6 @@ function render(data) {
           (isApiKey
             ? '<span class="badge badge-purple">API Key</span>'
             : (a.subscriptionType ? '<span class="badge badge-purple">' + esc(a.subscriptionType) + '</span>' : '')) +
-          (!isApiKey ? expiredBadge(a.expiresAt) : '') +
         '</div>' +
         '<div class="acct-meta">' +
           (isApiKey
@@ -462,6 +505,123 @@ function switchTab(tab) {
   document.getElementById('panel-apikey').style.display = tab === 'apikey' ? '' : 'none';
   document.getElementById('tab-oauth').classList.toggle('active', tab === 'oauth');
   document.getElementById('tab-apikey').classList.toggle('active', tab === 'apikey');
+}
+
+async function loadShareConfig() {
+  try {
+    const r = await fetch('/api/share/config');
+    const data = await r.json();
+    if (!data.ok) return;
+    const c = data.config;
+    document.getElementById('share-enabled').checked = !!c.enabled;
+    document.getElementById('share-bind').value = c.bindAddress || '127.0.0.1';
+    document.getElementById('share-peer').value = c.peerUrl || '';
+    document.getElementById('share-secret').value = c.secret || '';
+    document.getElementById('share-interval').value = c.intervalMs || 30000;
+    const badge = document.getElementById('share-running-badge');
+    if (data.running) {
+      badge.textContent = '● 主动同步中（定时轮询对端）';
+      badge.style.color = 'var(--green)';
+    } else if (c.enabled && !c.peerUrl) {
+      badge.textContent = '● 被动响应方（等待对端访问）';
+      badge.style.color = 'var(--blue, #3b82f6)';
+    } else if (c.enabled) {
+      badge.textContent = '○ 已启用但未运行';
+      badge.style.color = 'var(--text-dim)';
+    } else {
+      badge.textContent = '';
+    }
+    const status = document.getElementById('share-status');
+    if (c.lastSyncAt) {
+      const d = new Date(c.lastSyncAt);
+      let summary = '— 无变化';
+      if (c.lastResult) {
+        const { pulled = 0, pushed = 0 } = c.lastResult;
+        if (pulled || pushed) summary = `⬇ 拉取 ${pulled} ｜ ⬆ 推送 ${pushed}`;
+      }
+      const err = c.lastError ? ` ｜ 错误: ${c.lastError}` : '';
+      status.textContent = `上次同步: ${d.toLocaleString()} ｜ ${summary}${err}`;
+      status.style.color = c.lastError ? 'var(--red)' : 'var(--text-dim)';
+    } else {
+      status.textContent = '尚未同步';
+    }
+  } catch (e) {
+    console.warn('share config load failed', e);
+  }
+}
+
+function onShareEnabledChange() {
+  // 保存动作时再写入；这里仅 UI 提示
+}
+
+async function saveShareConfig() {
+  const body = {
+    enabled: document.getElementById('share-enabled').checked,
+    bindAddress: document.getElementById('share-bind').value.trim() || '127.0.0.1',
+    peerUrl: document.getElementById('share-peer').value.trim(),
+    secret: document.getElementById('share-secret').value.trim(),
+    intervalMs: parseInt(document.getElementById('share-interval').value, 10) || 30000,
+  };
+  try {
+    const r = await fetch('/api/share/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    showToast('已保存。' + (body.enabled ? ' 守护进程已启动。' : ''), 'ok');
+    await loadShareConfig();
+  } catch (e) {
+    showToast(e.message || '保存失败', 'err');
+  }
+}
+
+async function syncNow() {
+  try {
+    const r = await fetch('/api/share/sync-now', { method: 'POST' });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error);
+    if (data.error) throw new Error(data.error);
+    if (data.skipped) showToast('跳过: ' + data.skipped, 'warn');
+    else if ((data.pulled || 0) === 0 && (data.pushed || 0) === 0) showToast('两端账号一致，无需同步', 'ok');
+    else showToast(`同步完成：拉取 ${data.pulled || 0}，推送 ${data.pushed || 0}`, 'ok');
+    await loadShareConfig();
+    await load(true);
+  } catch (e) {
+    showToast(e.message || '同步失败', 'err');
+  }
+}
+
+async function copyShareSecret() {
+  try {
+    const r = await fetch('/api/share/secret');
+    const data = await r.json();
+    if (!data.ok || !data.secret) throw new Error('密钥为空');
+    await navigator.clipboard.writeText(data.secret);
+    showToast('密钥已复制到剪贴板', 'ok');
+  } catch (e) {
+    showToast(e.message || '复制失败', 'err');
+  }
+}
+
+async function shutdownWeb() {
+  if (!confirm('关闭 ccs web 服务？关闭后浏览器无法访问，需要重新启动 ccs web。')) return;
+  try {
+    await fetch('/api/shutdown', { method: 'POST' });
+    showToast('服务已关闭，可以关闭此页面。', 'ok');
+    document.body.style.opacity = '0.4';
+  } catch (e) {
+    showToast('已关闭', 'ok');
+    document.body.style.opacity = '0.4';
+  }
+}
+
+async function loadVersion() {
+  try {
+    const r = await fetch('/api/version');
+    const d = await r.json();
+    if (d.ok) document.getElementById('version-tag').textContent = 'v' + d.version;
+  } catch { /* ignore */ }
 }
 
 async function doRemove(name) {
@@ -632,7 +792,10 @@ function showToast(msg, type) {
 }
 
 load();
+loadVersion();
+loadShareConfig();
 setInterval(() => load(), 30000);
+setInterval(() => loadShareConfig(), 30000);
 </script>
 </body>
 </html>

@@ -13,7 +13,9 @@ const {
   findClaudeExe,
   formatExpiry,
   triggerCacheInvalidation,
+  readWebPid,
 } = require(path.join(__dirname, '..', 'src', 'utils'));
+const share = require(path.join(__dirname, '..', 'src', 'share'));
 const { startWebServer } = require(path.join(__dirname, '..', 'src', 'web'));
 
 const args = process.argv.slice(2);
@@ -23,7 +25,7 @@ const WEB_DEFAULT_PORT = 7899;
 
 const COMMANDS = new Set([
   'import', 'switch', 'status', 'accounts',
-  'clear-current', 'logout', 'remove', 'doctor', 'web',
+  'clear-current', 'logout', 'remove', 'doctor', 'web', 'sync',
 ]);
 
 async function main() {
@@ -31,6 +33,8 @@ async function main() {
     printStatus(new AccountStore().getStatus());
     console.log('');
     printAccounts(new AccountStore().listAccounts());
+    console.log('');
+    printRuntimeInfo();
     return;
   }
 
@@ -55,6 +59,7 @@ async function dispatch(cmd, rest) {
     case 'remove':       return cmdRemove(rest);
     case 'doctor':       return cmdDoctor();
     case 'web':          return cmdWeb(rest);
+    case 'sync':         return cmdSync();
   }
 }
 
@@ -77,9 +82,9 @@ async function cmdSwitch(rest) {
   const account = store.switchAccount(name);
   printAccountSummary(`Switched to "${name}"`, account);
 
-  process.stdout.write('Invalidating Claude Code token cache... ');
+  process.stdout.write('正在清除旧账号缓存... ');
   const ok = await triggerCacheInvalidation();
-  console.log(ok ? 'done.' : 'skipped (offline or no active session).');
+  console.log(ok ? '完成，状态栏将立即显示新账号。' : '完成。（API 探活失败，不影响切换；状态栏在下次刷新时生效）');
 }
 
 function cmdRemove(rest) {
@@ -94,6 +99,15 @@ function cmdClearCurrent() {
   console.log('Cleared current Claude auth state.');
   console.log('Removed live credentials and cleared userID/oauthAccount from .claude.json.');
   console.log('Session and history files were left untouched. You can now run /login in Claude.');
+}
+
+function cmdSync() {
+  const result = new AccountStore().syncActive();
+  if (result.synced) {
+    console.log(`Synced live credentials -> snapshot of "${result.name}".`);
+  } else {
+    console.log(`Sync skipped: ${result.reason}.`);
+  }
 }
 
 function cmdWeb(rest) {
@@ -114,6 +128,35 @@ function cmdDoctor() {
   console.log(`  Config file       : ${fs.existsSync(CONFIG_PATH) ? 'present' : 'missing'} (${CONFIG_PATH})`);
   console.log(`  Active account    : ${status.activeAccount || 'none'}`);
   console.log(`  Imported accounts : ${status.accountCount}`);
+  console.log('');
+  printRuntimeInfo();
+}
+
+function printRuntimeInfo() {
+  const web = readWebPid();
+  if (web) {
+    const role = web.shareEnabled
+      ? (web.sharePeerUrl ? 'share-sync ACTIVE' : 'share-sync PASSIVE')
+      : 'normal';
+    const url = `http://${web.bind === '0.0.0.0' ? '127.0.0.1' : web.bind}:${web.port}`;
+    console.log(`Web service       : running ${url} (PID ${web.pid}, ${role})`);
+  } else {
+    console.log(`Web service       : not running`);
+  }
+  const cfg = share.getShareConfig();
+  if (cfg?.enabled) {
+    const peer = cfg.peerUrl ? `peer=${cfg.peerUrl}` : 'passive (no peer)';
+    console.log(`Share sync        : enabled, ${peer}, interval=${cfg.intervalMs}ms`);
+    if (cfg.lastSyncAt) {
+      const r = cfg.lastResult ? `pulled=${cfg.lastResult.pulled || 0}, pushed=${cfg.lastResult.pushed || 0}` : 'none';
+      const err = cfg.lastError ? `, error=${cfg.lastError}` : '';
+      console.log(`  last sync       : ${cfg.lastSyncAt} (${r})${err}`);
+    } else {
+      console.log(`  last sync       : never`);
+    }
+  } else {
+    console.log(`Share sync        : disabled`);
+  }
 }
 
 // ── Printers ────────────────────────────────────────────────────────────────
@@ -173,6 +216,7 @@ Usage:
   ccs remove <name>         delete an imported account
   ccs clear-current         remove live credentials and clear account state
   ccs logout                alias for clear-current
+  ccs sync                  capture live credentials into the active snapshot
   ccs status                show current status
   ccs accounts              list imported accounts
   ccs doctor                check environment and config
