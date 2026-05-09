@@ -48,7 +48,12 @@ function defaultShareConfig() {
 function setShareConfig(patch) {
   const c = readConfig();
   const cur = c.shareSync || defaultShareConfig();
-  c.shareSync = { ...cur, ...patch };
+  // 防御：patch.secret 看起来像 mask（含 '...'）就忽略，保留旧 secret
+  const safePatch = { ...patch };
+  if (typeof safePatch.secret === 'string' && safePatch.secret.includes('...')) {
+    delete safePatch.secret;
+  }
+  c.shareSync = { ...cur, ...safePatch };
   if (!c.shareSync.secret && c.shareSync.enabled) {
     c.shareSync.secret = crypto.randomBytes(32).toString('hex');
   }
