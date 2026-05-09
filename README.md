@@ -256,6 +256,19 @@ node scripts/refresh-token.js
 
 ## 版本变更
 
+- **v3.7.1**：v3.7.0 后续打磨
+  - `ccs web share` 改为后台模式（spawn detached），启动后立即返回终端，打印 PID 和停止方法
+  - `ccs web stop` 命令读 pid 文件 SIGTERM
+  - `ccs web` 端口被占自动 +1 重试，最多 20 次
+  - `/api/shutdown` 同时接受 GET 和 POST，浏览器直接访问 URL 即可关闭
+  - `ccs CLI` 输出 API Key 类型分支，避免显示 undefined
+  - `ccs share` 子命令系列：status / enable / disable / secret / sync（CLI 配置共享同步，适合 Linux 无浏览器）
+  - `ccs share enable` 输出 secret 单独成行末尾，便于复制和管道提取
+  - `ccs web share` 不传 --peer/--bind 时保留已有配置（sentinel 处理）
+  - Web UI 共享同步绑定地址改为下拉选择
+  - Web UI 保存 share 配置时不再把 mask secret 当真值回写（前后端双重防御）
+  - Web UI 共享同步设置定时刷新只更新「上次同步」状态，不覆盖用户正在编辑的输入
+  - mac keychain 操作改用 spawnSync 避免 shell 注入隐患（read/write/delete/exists 统一）
 - **v3.7.0**：多端共享同步（Windows ↔ WSL/Linux）
   - 两端 ccs web 通过 HTTP 互访，按账号粒度同步整个账号库（OAuth + API Key）
   - 同步前自动 refreshFromLive：把当前 live credentials 回写到 active 账号快照，反映 OAuth 自动刷新后的最新 token
