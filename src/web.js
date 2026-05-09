@@ -42,10 +42,10 @@ function startWebServer(port, openBrowser, onReady) {
       return res.end(JSON.stringify({ ok: true, version: pkg.version }));
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/shutdown') {
+    if (url.pathname === '/api/shutdown' && (req.method === 'POST' || req.method === 'GET')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, message: 'shutting down' }));
-      console.log('Shutdown requested via web UI.');
+      console.log(`Shutdown requested via ${req.method}.`);
       setTimeout(() => process.exit(0), 100);
       return;
     }

@@ -245,7 +245,7 @@ async function spawnDetachedWeb(port) {
   console.log(`Background PID : ${child.pid}`);
   console.log(`Log file       : ${logPath}`);
   console.log(`停止服务       : ccs web stop`);
-  console.log(`               或: curl -X POST http://127.0.0.1:${info.port}/api/shutdown`);
+  console.log(`               或: 浏览器访问 http://127.0.0.1:${info.port}/api/shutdown`);
   console.log(`               或: kill ${child.pid}`);
 }
 
