@@ -94,7 +94,18 @@ class AccountStore {
     const oauth = extractOauth(live);
     if (!oauth || !oauth.accessToken || !oauth.refreshToken) return;
 
-    atomicWriteJson(credentialsSnapshotPath(active), live);
+    // 关键：仅当 live 内容与现有快照不同才更新 updatedAt。
+    // 否则 share sync 每次轮询都会无差别刷新 updatedAt，破坏"内容版本号"语义，
+    // 导致 hash 不同的两端因 updatedAt 落在容差内而被判定为"无差异"跳过同步。
+    const snapPath = credentialsSnapshotPath(active);
+    const newContent = JSON.stringify(live);
+    const oldContent = fileExists(snapPath)
+      ? (() => { try { return fs.readFileSync(snapPath, 'utf8'); } catch { return ''; } })()
+      : '';
+    const contentChanged = newContent !== oldContent;
+    if (!contentChanged) return;  // 内容相同，跳过整个写入和元数据更新
+
+    atomicWriteJson(snapPath, live);
     const liveState = this._readLiveState();
     atomicWriteJson(stateSnapshotPath(active), {
       userID: liveState.userID || null,

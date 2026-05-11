@@ -199,6 +199,9 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.6**：修复共享同步「无差异/掉线」bug
+  - `_syncActiveSnapshot` 仅在 live 内容跟现有快照不同时才刷新 `updatedAt`，避免每次轮询都把 updatedAt 推到 now，破坏内容版本号语义
+  - 同步算法 hash 不同时新增 fallback：updatedAt 落在容差内则用 OAuth `expiresAt` 决定方向（续期后必更大），打平 fallback 拉对端，避免循环 push
 - **v3.7.5**：README 顶部和 Web UI 顶部加显眼安全须知（Web 服务无鉴权，仅限可信内网/VPN 使用）；Web UI 加 footer 显示版本号、MIT、版权、GitHub/npm 链接
 - **v3.7.4**：Web UI 新增「Claude Code 状态栏」一键安装/卸载，配合 ccs 切换账号让 Claude Code 状态栏实时显示当前真实账号信息和用量。安装会复制 `statusline-command.sh` 到 `~/.claude/` 并注入 `hooks.Stop`，状态检测分三态：已安装 / 缺脚本 / 缺 hook
 - **v3.7.3**：共享同步术语统一为「主节点 / 从节点」（原"被动方/主动方"易混淆）；CLI 输出、Web UI 文案、README 一并改；架构说明改为 1 主节点 + N 从节点的 hub-spoke 主从同步
