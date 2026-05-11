@@ -47,108 +47,59 @@ Windows 双击桌面快捷方式即可启动（无 cmd 窗口）。普通模式 
 
 ## 多端共享同步
 
-两端 ccs web 通过 HTTP 互访同步整个账号库（OAuth + API Key）。按账号粒度比较 hash + updatedAt 决定同步方向，OAuth token 自动续期跨端可见。`activeAccount` 和账号删除不同步，各端独立。
+**架构：一台主动方 + N 台被动方**。主动方定时轮询每个被动方，按账号粒度比较 hash + updatedAt，新者覆盖旧者。OAuth token 在任一端续期后会通过主动方自动扇出传播到所有被动方，无需配置链。`activeAccount` 和账号删除不同步，各端独立。
 
-### 一键启动（推荐）
+### Web UI 配置（推荐）
 
-任意一端启动 share 模式（后台守护，立即返回终端）：
+任一端打开 Web UI，「多端共享同步」区域：
+
+1. **主动方**（任选一台稳定常驻的）：勾选启用 → 填对端 URL → 留空 secret 自动生成 → 保存 → 看「同步快照」处显示的 Secret，复制
+2. **被动方**：勾选启用 → 对端 URL **留空** → 粘贴主动方的 Secret → 保存
+
+被动方收到主动方的轮询自动 push/pull，不需要互填 URL。
+
+### CLI 一键模式
+
+任一端跑 `ccs web share`，后台守护启动 web 并自动打印 URL+Secret：
 
 ```bash
 $ ccs web share
-
-=== 共享同步信息 ===
 URL    : http://192.168.1.168:7900
 Secret : ca3eace3acdc1e39db7995e2ffc52215ad0dc9ba7780d715de223c7db814ea47
 角色   : 被动方（等待对端访问）
-
-在对端执行（任选其一）：
-  ccs share enable --peer http://192.168.1.168:7900 --secret ca3e...ea47
-  ccs web        # 启动对端 web 后自动同步
-
-Background PID : 60436
-Log file       : /home/user/.ccs/web.log
-停止服务       : ccs web stop
+停止服务: ccs web stop
 ```
 
-对端粘贴命令即可：
+对端粘贴提示行即可：
 
 ```bash
-ccs share enable --peer http://192.168.1.168:7900 --secret <对端给的 secret>
+ccs share enable --peer http://192.168.1.168:7900 --secret <粘贴 secret>
 ccs web 7899
-```
-
-或对端也走 `ccs web share` 模式（不传 --peer 即被动响应方）。**两端 secret 必须一致**，只需一端填 peer URL 即可双向同步。
-
-### Web UI 配置
-
-在 Web UI「多端共享同步」区域勾选启用，填好两个字段，点保存。
-
-### CLI 单独命令（适合 Linux/WSL 无浏览器）
-
-```bash
-ccs share status          # 查看当前配置和上次同步结果
-ccs share enable [opts]   # 启用 share-sync
-                          # opts: --peer URL --secret X --bind 0.0.0.0|127.0.0.1 --interval MS
-ccs share secret          # 输出明文 secret，便于复制到对端
-ccs share sync            # 主动方手动触发一轮同步
-ccs share disable         # 禁用并清空 secret
-ccs web stop              # 停止后台 web 服务
 ```
 
 ### 注意事项
 
-- 每次 OAuth refresh 会 rotate refresh_token，旧的立即作废。两端共享时本端刷完后会自动通过 share sync 推到对端；如果同步链路断开期间发生 refresh，对端持有的旧 refresh_token 会失效
+- 每次 OAuth refresh 会 rotate refresh_token，旧的立即作废。share sync 启用时本端刷完后通过主动方自动同步到其他端；如同步链路断开期间发生 refresh，未同步的端会失效
 - 凭证走 LAN 明文（仅 Bearer 鉴权），仅建议同一可信网络内使用
-- 启用 share 后 web 不退 idle，需 `ccs web stop` 或访问 `/api/shutdown`（GET 即可）停止
-- macOS 端理论支持作为 share 节点（通过 `security` CLI 读写 Keychain），第一次接收同步会弹 Keychain 授权框选「始终允许」后免确认；未在真实多机环境验证过
+- 启用 share 后 web 不退 idle，需 `ccs web stop` 或浏览器访问 `/api/shutdown` 停止
+- macOS 端理论支持（通过 `security` CLI 读写 Keychain），第一次接收同步弹 Keychain 授权框选「始终允许」后免确认；未在真实多机环境验证过
 
 ## CLI 用法
 
-### 快速开始
+Web UI 是推荐入口。CLI 用于无浏览器场景（Linux 服务器、自动化脚本）或快捷操作。完整命令用 `ccs --help` 查看。
 
 ```bash
-# 1) Claude Code 已登录账号 A 时，先导入
-ccs import account_a
+# 切换
+ccs <name>                # 切到 <name>
+ccs                       # 看当前状态 + 账号列表 + web/share 运行状态
 
-# 2) 在 Claude Code 中切换登录到账号 B，再导入
-ccs import account_b
-
-# 3) 随时切换
-ccs switch account_a
-ccs account_b            # 简写
-```
-
-### 完整命令列表
-
-```
-# 总览
-ccs                       显示当前状态、账号列表、web/share 运行信息
-ccs <name>                切换到指定账号（switch 简写）
-ccs -                     清除当前登录状态（同 clear-current / logout）
-ccs -h / --help           显示帮助
-
-# 账号管理
-ccs import <name> [path]  将当前 live credentials 导入为 <name>
-ccs switch <name>         切换到已导入的账号
-ccs remove <name>         删除已导入的账号
-ccs accounts              列出所有已导入账号
-ccs status                显示当前状态
-ccs sync                  把 live credentials 回写到当前活跃账号的快照
-ccs clear-current/logout  清除 live credentials，清空账号状态字段
-ccs doctor                检查环境和配置
-
-# Web 服务
-ccs web [port]            前台启动 Web UI（默认 7899，端口被占自动 +1）
-ccs web share [port] [--peer URL] [--bind ADDR]
-                          后台启动 Web UI 并启用共享同步，打印 URL/Secret
-ccs web stop              停止后台 web 服务
+# 导入：在 Claude Code 登录目标账号后
+ccs import <name>
 
 # 共享同步
-ccs share status          查看 share-sync 配置和上次同步结果
-ccs share enable [opts]   启用 share-sync
-ccs share disable         禁用并清除 secret
-ccs share secret          输出明文 secret
-ccs share sync            立即触发一轮同步
+ccs web share             # 一键后台启动
+ccs share enable --peer http://X:7899 --secret abc
+ccs web stop
 ```
 
 ## API Key 账号
