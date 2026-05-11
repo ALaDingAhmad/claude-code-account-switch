@@ -59,37 +59,33 @@ Windows 双击桌面快捷方式即可启动（无 cmd 窗口）。普通模式 
 
 `activeAccount` 和账号删除不同步，各端独立。
 
-### Web UI 配置（推荐）
+### 一键命令（推荐）
 
-**Step 1 — 起主节点**（任选一台稳定常驻的机器，建议绑 0.0.0.0 让 LAN 可达）：
-
-跑 `ccs web share`，终端打印：
-
-```
-URL    : http://192.168.1.168:7900
-Secret : ca3eace3acdc1e39db7995e2ffc52215ad0dc9ba7780d715de223c7db814ea47
-角色   : 主节点（等待从节点访问）
-```
-
-记下 URL 和 Secret。
-
-**Step 2 — 每个从节点都填同一个主节点 URL + Secret**：
-
-打开 Web UI「多端共享同步」区域：
-
-- 勾选启用
-- **主节点 URL** = Step 1 打印的 URL
-- **共享密钥** = Step 1 打印的 Secret
-- 保存
-
-或者用 CLI：
+**Step 1 — 起主节点**（任选一台稳定常驻、LAN 可达的机器）：
 
 ```bash
-ccs share enable --peer http://192.168.1.168:7900 --secret <粘贴 Secret>
-ccs web 7899
+ccs web share
+```
+
+终端打印主节点 URL 和自动生成的 Secret：
+
+```
+本机角色  : 主节点（被动响应，等待从节点访问）
+本机 URL  : http://192.168.1.168:7899
+共享密钥  : ca3eace3acdc1e39db7995e2ffc52215ad0dc9ba7780d715de223c7db814ea47
+```
+
+**Step 2 — 每个从节点一行命令**（用 Step 1 给的 URL 和 Secret）：
+
+```bash
+ccs web share --peer http://192.168.1.168:7899 --secret <粘贴 Secret>
 ```
 
 N 个从节点重复 Step 2 即可，**从节点之间不需要互联**，全靠主节点扇出。
+
+### Web UI 配置（推荐入口）
+
+也可以在 Web UI「多端共享同步」区域勾选启用，填好 URL 和 Secret 保存。
 
 ### CLI 一键模式
 
@@ -199,6 +195,7 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.9**：`ccs web share` 接受 `--secret` 参数，可一行命令完成「设密钥 + 启用 share + 启动 web」三步合一；invite 提示文本同步改为一行命令；README 多端共享同步章节改为一行命令风格
 - **v3.7.8**：修正 `ccs web share` 启动提示按本机角色分支输出
   - 本机是从节点时，明确显示主节点 URL 和"请确保主节点已启动"提示，给出在主节点执行的命令；不再误导让对端配置成"连到本机"
   - 本机是主节点时，给出在从节点执行的 enable 命令
