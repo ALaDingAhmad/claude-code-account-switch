@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 
 const AccountStore = require(path.join(__dirname, '..', 'src', 'store'));
@@ -213,11 +214,98 @@ async function cmdWeb(rest) {
     if (bind !== null) patch.bindAddress = bind;
     else if (!cur.bindAddress) patch.bindAddress = '0.0.0.0';
     if (secret !== null) patch.secret = secret;
+
+    const running = readWebPid();
+    if (running) {
+      // 复用现有 web 服务：HTTP patch 配置即可，不再 spawn 新进程
+      const portArgGiven = rest.some((a) => /^\d+$/.test(a));
+      if (portArgGiven && port !== running.port) {
+        console.log(`⚠ 已有 ccs web 在端口 ${running.port} 运行，忽略指定的端口 ${port}（如需换端口，先 ccs web stop 再启动）。`);
+      }
+      if (bind !== null && bind !== running.bind) {
+        console.log(`⚠ bindAddress 改为 "${bind}" 已写入配置，但对运行中的服务不生效，需 ccs web stop 后重启才会切换监听地址。`);
+      }
+      // 自指校验由 web 服务端兜底（POST /api/share/config）
+      return reuseRunningWeb(running, patch);
+    }
+
+    if (peer) {
+      const localNodeId = share.getNodeId();
+      const check = await probePeerSelf(peer, localNodeId);
+      if (check.isSelf) {
+        throw new Error(`主节点 URL 不能指向本机自己（nodeId 相同：${check.peerNodeId}）`);
+      }
+      if (check.warn) console.log(`⚠ peer 探活失败（${check.warn}），按宽松策略继续。`);
+    }
+
     share.setShareConfig(patch);
     return spawnDetachedWeb(port);
   }
 
   startWebServer(port, true, null);
+}
+
+async function probePeerSelf(peerUrl, localNodeId) {
+  const { URL } = require('url');
+  const https = require('https');
+  let u;
+  try { u = new URL(peerUrl.replace(/\/$/, '') + '/api/share/whoami'); }
+  catch (e) { return { isSelf: false, warn: `peerUrl 无法解析: ${e.message}` }; }
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve) => {
+    const req = lib.request({
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname,
+      method: 'GET',
+      timeout: 3000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (res.statusCode !== 200) return resolve({ isSelf: false, warn: `whoami HTTP ${res.statusCode}` });
+        try {
+          const j = JSON.parse(text);
+          const peerNodeId = j && j.nodeId;
+          if (!peerNodeId) return resolve({ isSelf: false, warn: 'whoami 缺少 nodeId（对端可能为旧版 ccs）' });
+          return resolve({ isSelf: peerNodeId === localNodeId, peerNodeId });
+        } catch (e) { resolve({ isSelf: false, warn: `whoami 响应非 JSON: ${e.message}` }); }
+      });
+    });
+    req.on('error', (e) => resolve({ isSelf: false, warn: `whoami 请求失败: ${e.message}` }));
+    req.on('timeout', () => { req.destroy(); resolve({ isSelf: false, warn: 'whoami 超时' }); });
+    req.end();
+  });
+}
+
+async function reuseRunningWeb(info, patch) {
+  const host = info.bind === '0.0.0.0' ? '127.0.0.1' : (info.bind || '127.0.0.1');
+  const url = `http://${host}:${info.port}/api/share/config`;
+  const body = JSON.stringify(patch);
+  const resp = await new Promise((resolve, reject) => {
+    const req = http.request(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 5000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.write(body);
+    req.end();
+  }).catch((e) => { throw new Error(`无法访问现有 web 服务 ${url}: ${e.message}`); });
+
+  if (resp.status < 200 || resp.status >= 300) {
+    throw new Error(`现有 web 服务拒绝配置更新 (HTTP ${resp.status}): ${resp.text.slice(0, 200)}`);
+  }
+
+  console.log(`复用运行中的 ccs web 服务（PID ${info.pid}, ${info.bind}:${info.port}），已通过 API 启用 share。`);
+  printShareInvite(info.port, info.bind);
+  console.log(`停止服务       : ccs web stop`);
 }
 
 async function spawnDetachedWeb(port) {

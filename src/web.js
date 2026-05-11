@@ -43,6 +43,12 @@ function startWebServer(port, openBrowser, onReady) {
       return res.end(JSON.stringify({ ok: true, version: pkg.version }));
     }
 
+    // 无鉴权：用于配置 peer 前对端身份探活，避免主节点 URL 指向自己
+    if (req.method === 'GET' && url.pathname === '/api/share/whoami') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, nodeId: share.getNodeId() }));
+    }
+
     if (url.pathname === '/api/shutdown' && (req.method === 'POST' || req.method === 'GET')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, message: 'shutting down' }));
@@ -166,6 +172,14 @@ function startWebServer(port, openBrowser, onReady) {
     if (req.method === 'POST' && url.pathname === '/api/share/config') {
       try {
         const body = JSON.parse(await readBody(req));
+        if (body && typeof body.peerUrl === 'string' && body.peerUrl.trim()) {
+          const check = await probePeerSelf(body.peerUrl.trim(), share.getNodeId());
+          if (check.isSelf) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ ok: false, error: `主节点 URL 不能指向本机自己（nodeId 相同：${check.peerNodeId}）` }));
+          }
+          if (check.warn) console.log(`[share] peer 探活失败（${check.warn}），按宽松策略放行`);
+        }
         const cfg = share.setShareConfig(body);
         if (cfg.enabled) {
           cancelIdle();              // 启用后立刻取消 idle 计时
@@ -302,6 +316,7 @@ function startWebServer(port, openBrowser, onReady) {
 
   function onListen(actualPort) {
     resetIdle();
+    try { share.getNodeId(); } catch { /* ignore */ }
     try {
       const r = new AccountStore().syncActive();
       if (r.synced) console.log(`[boot] synced live -> snapshot of "${r.name}"`);
@@ -362,6 +377,42 @@ function readBody(req) {
     req.on('data', (chunk) => (data += chunk));
     req.on('end', () => resolve(data || '{}'));
     req.on('error', reject);
+  });
+}
+
+// 探 peer 的 nodeId，判断 peerUrl 是否指向本机自己
+// 返回：{ isSelf, peerNodeId, warn }；探活失败不阻塞，返回 warn 让调用方放行
+async function probePeerSelf(peerUrl, localNodeId) {
+  const { URL } = require('url');
+  const https = require('https');
+  let u;
+  try { u = new URL(peerUrl.replace(/\/$/, '') + '/api/share/whoami'); }
+  catch (e) { return { isSelf: false, warn: `peerUrl 无法解析: ${e.message}` }; }
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve) => {
+    const req = lib.request({
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname,
+      method: 'GET',
+      timeout: 3000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (res.statusCode !== 200) return resolve({ isSelf: false, warn: `whoami HTTP ${res.statusCode}` });
+        try {
+          const j = JSON.parse(text);
+          const peerNodeId = j && j.nodeId;
+          if (!peerNodeId) return resolve({ isSelf: false, warn: 'whoami 缺少 nodeId（对端可能为旧版 ccs）' });
+          return resolve({ isSelf: peerNodeId === localNodeId, peerNodeId });
+        } catch (e) { resolve({ isSelf: false, warn: `whoami 响应非 JSON: ${e.message}` }); }
+      });
+    });
+    req.on('error', (e) => resolve({ isSelf: false, warn: `whoami 请求失败: ${e.message}` }));
+    req.on('timeout', () => { req.destroy(); resolve({ isSelf: false, warn: 'whoami 超时' }); });
+    req.end();
   });
 }
 

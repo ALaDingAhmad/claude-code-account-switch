@@ -32,6 +32,14 @@ function getShareConfig() {
   return c.shareSync || null;
 }
 
+function getNodeId() {
+  const c = readConfig();
+  if (c.nodeId && typeof c.nodeId === 'string' && c.nodeId.length >= 8) return c.nodeId;
+  c.nodeId = crypto.randomBytes(8).toString('hex');
+  saveConfig(c);
+  return c.nodeId;
+}
+
 function defaultShareConfig() {
   return {
     enabled: false,
@@ -389,6 +397,7 @@ module.exports = {
   getShareConfig,
   setShareConfig,
   defaultShareConfig,
+  getNodeId,
   refreshFromLive,
   localSnapshot,
   localAccountDetail,
