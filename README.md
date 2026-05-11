@@ -21,34 +21,38 @@ Windows / macOS / Linux / WSL CLI 工具，通过备份和还原 Claude Code 凭
 
 ## 平台差异
 
-| 项目 | Windows | macOS |
-|------|---------|-------|
-| OAuth 凭证存储 | `~/.claude/.credentials.json` | Keychain `Claude Code-credentials`（service） |
-| 桌面快捷方式 | 安装时自动创建（`wscript.exe` 无窗口启动 + 自动杀旧进程） | 无（运行 `ccs web` 即可） |
-| 自动打开浏览器 | `start <url>` | `open <url>` |
+| 项目 | Windows | macOS | Linux / WSL |
+|------|---------|-------|-------------|
+| OAuth 凭证存储 | `~/.claude/.credentials.json` | Keychain `Claude Code-credentials` | `~/.claude/.credentials.json` |
+| 桌面快捷方式 | 安装时自动创建（`wscript.exe` 无窗口启动 + 自动杀旧进程） | 无（运行 `ccs web` 即可） | 无 |
+| 自动打开浏览器 | `start <url>` | `open <url>` | `xdg-open`（视环境） |
 
-macOS 首次切换会弹出 Keychain 授权框，点击「始终允许」后续切换无需再确认。
+macOS 首次操作 Keychain 会弹授权框，点击「始终允许」后续无需再确认。
 
 ## 环境要求
 
-- Windows 10/11 或 macOS
+- Windows 10/11、macOS、Linux 或 WSL2
 - Node.js 18+
 
 ## 安装
 
-从打包文件安装（推荐给同事用）：
+从 npm 安装（推荐）：
 
 ```bash
-npm install -g dist/claude-code-account-switch-3.5.0.tgz
+npm install -g claude-code-account-switch
 ```
 
-从源码安装：
+从源码或本地包安装：
 
 ```bash
+# 仓库内
 npm install -g .
+
+# 或从 dist/ 内的 tarball
+npm install -g dist/claude-code-account-switch-3.7.2.tgz
 ```
 
-Windows 安装后自动在桌面创建「CCS 管理界面」快捷方式。
+Windows 安装后自动在桌面创建「CCS 管理界面」快捷方式（mac/Linux 不创建）。
 
 ## 快速开始
 
@@ -299,5 +303,5 @@ node scripts/refresh-token.js
 
 ## License
 
-MIT © 2026 baiqiang
+MIT © 2026 [ALaDingAhmad](https://github.com/ALaDingAhmad)
 
