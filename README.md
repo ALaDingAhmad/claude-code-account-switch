@@ -138,51 +138,19 @@ ccs web stop
 2. 切换到该账号后 CCS 自动写入 `~/.claude/settings.json` 的 `env` 字段并清空 OAuth 凭证
 3. 切回 OAuth 账号时自动清除 API Key 环境变量
 
-## 主动刷新 token
-
-`scripts/refresh-token.js` 调用 Anthropic OAuth refresh 端点，把当前 OAuth access token 续期 8 小时，并把新 credentials 同时写入 live 和 ccs 快照：
-
-```bash
-node scripts/refresh-token.js
-```
-
-适用场景：
-- 长期不切换的账号担心 refresh_token 临近 30 天滑动窗口失效时主动续命
-- 验证 share sync 跨端 token 同步链路
-
-注意：每次刷新会 rotate refresh_token，旧 refresh_token 立即作废。两端 share sync 启用时本端刷完后会自动同步推到对端；如未启用 share，对端持有的旧 refresh_token 会失效。
-
 ## 状态栏脚本
 
-`scripts/statusline-command.sh` 是 Claude Code 状态栏脚本，输出三行：
+**配合 ccs 切换账号，让 Claude Code 状态栏实时显示当前真实账号信息和用量。**
+
+Claude Code 自带状态栏依赖进程内 stdin 注入的 profile / usage 数据，跨账号切换后会显示旧账号信息。`scripts/statusline-command.sh` 改成直接查 `/api/oauth/profile` 和 `/api/oauth/usage`，按 token hash 做缓存键，切换账号时 CCS 自动清缓存，**下次刷新立即显示新账号**。
+
+输出三行：
 
 - 第一行：`user@host MSYSTEM 当前目录`
-- 第二行：模型 | ctx 用量 | 累计费用 | 5h/7d 速率限制（直接查 `/api/oauth/usage`，60s 缓存）
-- 第三行：OAuth 账号姓名、邮箱、套餐（查 `/api/oauth/profile`，5 分钟缓存）
+- 第二行：模型 | ctx 用量 | 累计费用 | 5h/7d 速率限制（60s 缓存）
+- 第三行：OAuth 姓名、邮箱、套餐（5 分钟缓存）
 
-切换账号时 CCS 自动清除两个缓存文件，状态栏下次刷新立即显示新账号信息。
-
-配置（在 `~/.claude/settings.json` 的 `hooks` 中添加）：
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/statusline-command.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-把脚本复制到 `~/.claude/statusline-command.sh` 即可使用。
+在 Web UI 的「Claude Code 状态栏」区块点「安装」即可：复制脚本到 `~/.claude/statusline-command.sh`，并在 `~/.claude/settings.json` 的 `hooks.Stop` 注入命令。卸载同理一键完成。
 
 ## 原理
 
@@ -226,6 +194,7 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.4**：Web UI 新增「Claude Code 状态栏」一键安装/卸载，配合 ccs 切换账号让 Claude Code 状态栏实时显示当前真实账号信息和用量。安装会复制 `statusline-command.sh` 到 `~/.claude/` 并注入 `hooks.Stop`，状态检测分三态：已安装 / 缺脚本 / 缺 hook
 - **v3.7.3**：共享同步术语统一为「主节点 / 从节点」（原"被动方/主动方"易混淆）；CLI 输出、Web UI 文案、README 一并改；架构说明改为 1 主节点 + N 从节点的 hub-spoke 主从同步
 - **v3.7.2**：package.json 元信息完善（description 反映多平台支持，repository/homepage/bugs 指向 GitHub，扩展 keywords）；README 重排结构（Web UI 和共享同步前置），加徽章和多仓库链接
 - **v3.7.1**：v3.7.0 后续打磨

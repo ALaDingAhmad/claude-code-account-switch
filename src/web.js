@@ -5,6 +5,7 @@ const { execSync } = require('child_process');
 const AccountStore = require('./store');
 const { triggerCacheInvalidation, writeWebPid, clearWebPid } = require('./utils');
 const share = require('./share');
+const statusline = require('./statusline');
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -180,6 +181,39 @@ function startWebServer(port, openBrowser, onReady) {
         } catch { /* ignore */ }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, config: { ...cfg, secret: cfg.secret ? '***' : '' } }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/statusline/status') {
+      try {
+        const s = statusline.getStatus();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, ...s }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/statusline/install') {
+      try {
+        const s = statusline.install();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, ...s }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/statusline/uninstall') {
+      try {
+        const s = statusline.uninstall();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, ...s }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: false, error: e.message }));

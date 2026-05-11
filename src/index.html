@@ -308,6 +308,26 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
   <div class="section-label">已导入账号</div>
   <div id="accounts-section" class="account-list"></div>
 
+  <!-- 状态栏脚本 -->
+  <div class="section-label" style="margin-top:32px">Claude Code 状态栏</div>
+  <div class="import-card" id="statusline-section">
+    <p style="margin-bottom:14px;color:var(--text-dim);font-size:13px;line-height:1.6">
+      <b>配合 ccs 切换账号，让 Claude Code 状态栏实时显示当前真实账号信息和用量。</b><br>
+      脚本直查 <code>/api/oauth/profile</code> 和 <code>/api/oauth/usage</code>（按 token hash 做缓存键），ccs 切换账号后状态栏下一次刷新立即变成新账号的姓名/邮箱/套餐和 5h+7d 用量，不再显示 Claude Code 自带的旧值。<br>
+      <br>
+      显示内容：<code>user@host MSYSTEM 目录</code>｜ 模型 / ctx / 费用 / 5h+7d 速率 ｜ OAuth 姓名+邮箱+套餐<br>
+      <br>
+      安装会复制脚本到 <code>~/.claude/statusline-command.sh</code>，并在 <code>~/.claude/settings.json</code> 的 <code>hooks.Stop</code> 注入命令。
+    </p>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <div id="statusline-status" style="font-size:13px"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="statusline-uninstall-btn" onclick="doStatuslineUninstall()" style="display:none">卸载</button>
+        <button class="btn btn-accent" id="statusline-install-btn" onclick="doStatuslineInstall()">安装</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Share Sync 设置 -->
   <div class="section-label" style="margin-top:32px">多端共享同步</div>
   <div class="import-card" id="share-section">
@@ -641,6 +661,64 @@ async function shutdownWeb() {
   }
 }
 
+async function loadStatuslineStatus() {
+  try {
+    const r = await fetch('/api/statusline/status');
+    const d = await r.json();
+    if (!d.ok) return;
+    renderStatuslineStatus(d);
+  } catch { /* ignore */ }
+}
+
+function renderStatuslineStatus(s) {
+  const el = document.getElementById('statusline-status');
+  const installBtn = document.getElementById('statusline-install-btn');
+  const uninstallBtn = document.getElementById('statusline-uninstall-btn');
+  if (s.installed) {
+    el.innerHTML = '<span style="color:var(--green);font-weight:600">● 已安装</span> ' +
+      '<span style="color:var(--text-dim)">脚本：' + esc(s.targetPath) + '</span>';
+    installBtn.textContent = '重新安装（更新脚本）';
+    uninstallBtn.style.display = '';
+  } else if (s.targetExists && !s.hookInstalled) {
+    el.innerHTML = '<span style="color:#f59e0b;font-weight:600">⚠ 脚本已复制但 hook 未配置</span>';
+    installBtn.textContent = '配置 hook';
+    uninstallBtn.style.display = '';
+  } else if (!s.targetExists && s.hookInstalled) {
+    el.innerHTML = '<span style="color:#f59e0b;font-weight:600">⚠ hook 已配置但脚本缺失</span>';
+    installBtn.textContent = '重新安装脚本';
+    uninstallBtn.style.display = '';
+  } else {
+    el.innerHTML = '<span style="color:var(--text-dim)">未安装</span>';
+    installBtn.textContent = '安装';
+    uninstallBtn.style.display = 'none';
+  }
+}
+
+async function doStatuslineInstall() {
+  try {
+    const r = await fetch('/api/statusline/install', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    renderStatuslineStatus(d);
+    showToast('状态栏脚本已安装，Claude Code 下次刷新即可看到', 'ok');
+  } catch (e) {
+    showToast(e.message || '安装失败', 'err');
+  }
+}
+
+async function doStatuslineUninstall() {
+  if (!confirm('卸载状态栏脚本？将删除 ~/.claude/statusline-command.sh 并清理 settings.json 里的 hook。')) return;
+  try {
+    const r = await fetch('/api/statusline/uninstall', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    renderStatuslineStatus(d);
+    showToast('已卸载', 'ok');
+  } catch (e) {
+    showToast(e.message || '卸载失败', 'err');
+  }
+}
+
 async function loadVersion() {
   try {
     const r = await fetch('/api/version');
@@ -819,6 +897,7 @@ function showToast(msg, type) {
 load();
 loadVersion();
 loadShareConfig();
+loadStatuslineStatus();
 setInterval(() => load(), 30000);
 setInterval(() => loadShareStatus(), 30000);
 </script>
