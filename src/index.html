@@ -268,6 +268,13 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
     </div>
   </div>
 
+  <!-- 安全须知 -->
+  <div id="security-banner" style="margin:0 0 18px;padding:12px 16px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;font-size:12.5px;line-height:1.6;color:#78350f">
+    ⚠️ <b>安全须知</b>：Web 服务无鉴权，监听端口的任何人都能切换账号 / 读取共享密钥。
+    默认 <code>127.0.0.1</code> 仅本机可访问；若启用共享同步绑定 <code>0.0.0.0</code>，
+    <b>仅限可信内网或 VPN 使用</b>，切勿暴露公网或在共用 Wi-Fi 上启用。
+  </div>
+
   <!-- Active account -->
   <div id="active-section"></div>
 
@@ -379,6 +386,15 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
       </div>
     </div>
   </div>
+
+  <footer style="margin-top:40px;padding:20px 0;text-align:center;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border)">
+    CCS <span id="footer-version"></span> · MIT License · © 2026
+    <a href="https://github.com/ALaDingAhmad" target="_blank" rel="noopener" style="color:inherit">ALaDingAhmad</a>
+    ·
+    <a href="https://github.com/ALaDingAhmad/claude-code-account-switch" target="_blank" rel="noopener" style="color:inherit">GitHub</a>
+    ·
+    <a href="https://www.npmjs.com/package/claude-code-account-switch" target="_blank" rel="noopener" style="color:inherit">npm</a>
+  </footer>
 
 </div>
 
@@ -723,7 +739,11 @@ async function loadVersion() {
   try {
     const r = await fetch('/api/version');
     const d = await r.json();
-    if (d.ok) document.getElementById('version-tag').textContent = 'v' + d.version;
+    if (d.ok) {
+      document.getElementById('version-tag').textContent = 'v' + d.version;
+      const f = document.getElementById('footer-version');
+      if (f) f.textContent = 'v' + d.version;
+    }
   } catch { /* ignore */ }
 }
 

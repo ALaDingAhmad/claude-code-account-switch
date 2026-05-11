@@ -8,6 +8,11 @@ Windows / macOS / Linux / WSL 多平台 CLI 工具，通过备份和还原 Claud
 
 不代理请求，不切换 profile 目录，不影响 `.claude/sessions`、`history.jsonl` 和项目状态。
 
+> ⚠️ **安全须知**：Web 服务本身**不带鉴权**，监听端口的任何人都能通过 API 切换账号、查看共享密钥、导入/删除账号。
+> - 默认绑 `127.0.0.1`（仅本机访问）→ 安全
+> - 共享同步切换到 `0.0.0.0`（LAN 可达）后，**仅限可信内网/VPN 使用**，不要暴露到公网，也避免在共用 Wi-Fi 等不可信环境启用
+> - 共享同步的 `Bearer` 密钥保护 `/api/share/*` 端点，但**不保护**其他 API（`/api/switch`、`/api/import` 等）
+
 - npm：<https://www.npmjs.com/package/claude-code-account-switch>
 - GitHub：<https://github.com/ALaDingAhmad/claude-code-account-switch>
 - Gitee 镜像：<https://gitee.com/superas/claude-code-account-switch>
@@ -194,6 +199,7 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.5**：README 顶部和 Web UI 顶部加显眼安全须知（Web 服务无鉴权，仅限可信内网/VPN 使用）；Web UI 加 footer 显示版本号、MIT、版权、GitHub/npm 链接
 - **v3.7.4**：Web UI 新增「Claude Code 状态栏」一键安装/卸载，配合 ccs 切换账号让 Claude Code 状态栏实时显示当前真实账号信息和用量。安装会复制 `statusline-command.sh` 到 `~/.claude/` 并注入 `hooks.Stop`，状态检测分三态：已安装 / 缺脚本 / 缺 hook
 - **v3.7.3**：共享同步术语统一为「主节点 / 从节点」（原"被动方/主动方"易混淆）；CLI 输出、Web UI 文案、README 一并改；架构说明改为 1 主节点 + N 从节点的 hub-spoke 主从同步
 - **v3.7.2**：package.json 元信息完善（description 反映多平台支持，repository/homepage/bugs 指向 GitHub，扩展 keywords）；README 重排结构（Web UI 和共享同步前置），加徽章和多仓库链接
