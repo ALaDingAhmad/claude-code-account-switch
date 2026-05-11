@@ -312,10 +312,10 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
   <div class="section-label" style="margin-top:32px">多端共享同步</div>
   <div class="import-card" id="share-section">
     <p style="margin-bottom:14px;color:var(--text-dim);font-size:13px;line-height:1.6">
-      在 Windows 与 WSL（或两台 LAN 内的机器）各自启动 ccs web，通过 HTTP 互相同步登录凭证。
-      谁的 OAuth token 更新（expiresAt 更大），就把它推给另一端。
+      主从架构：<b>1 主节点 + N 从节点</b>。从节点每 30s 轮询主节点，谁的 OAuth token 更新就同步过去。
       <br>
-      <b>只需一端填对端 URL</b>作为主动方（定时轮询），另一端留空 URL 作为被动方（仅响应请求）。两端密钥必须一致。
+      <b>主节点</b>留空「主节点 URL」（不主动发起，等待从节点访问）。
+      <b>从节点</b>填主节点 URL。所有节点密钥必须一致。
       凭证走 LAN 明文传输，仅建议同一可信网络使用。
     </p>
     <div style="display:flex;flex-direction:column;gap:12px">
@@ -334,8 +334,8 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
         </select>
       </div>
       <div class="import-row">
-        <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">对端 URL</div>
-        <input class="input" id="share-peer" type="text" placeholder="http://其他机器IP:7899（留空 = 被动响应方）" />
+        <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">主节点 URL</div>
+        <input class="input" id="share-peer" type="text" placeholder="http://主节点IP:7899（留空表示本机就是主节点）" />
       </div>
       <div class="import-row">
         <div style="flex:0 0 140px;color:var(--text-dim);font-size:13px;align-self:center">共享密钥</div>
@@ -546,10 +546,10 @@ function applyShareStatusUI(data) {
   const c = data.config;
   const badge = document.getElementById('share-running-badge');
   if (data.running) {
-    badge.textContent = '● 主动同步中（定时轮询对端）';
+    badge.textContent = '● 从节点运行中（定时轮询主节点）';
     badge.style.color = 'var(--green)';
   } else if (c.enabled && !c.peerUrl) {
-    badge.textContent = '● 被动响应方（等待对端访问）';
+    badge.textContent = '● 主节点（等待从节点访问）';
     badge.style.color = 'var(--blue, #3b82f6)';
   } else if (c.enabled) {
     badge.textContent = '○ 已启用但未运行';
