@@ -199,6 +199,9 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.8**：修正 `ccs web share` 启动提示按本机角色分支输出
+  - 本机是从节点时，明确显示主节点 URL 和"请确保主节点已启动"提示，给出在主节点执行的命令；不再误导让对端配置成"连到本机"
+  - 本机是主节点时，给出在从节点执行的 enable 命令
 - **v3.7.7**：共享同步方向判据改用 OAuth `expiresAt` 作主键（access token 续期必向后跳 8h，单调递增，是真版本号），API Key 仍用 `updatedAt`。彻底摆脱 updatedAt 被本地操作时间干扰造成的方向误判
 - **v3.7.6**：修复共享同步「无差异/掉线」bug
   - `_syncActiveSnapshot` 仅在 live 内容跟现有快照不同时才刷新 `updatedAt`，避免每次轮询都把 updatedAt 推到 now，破坏内容版本号语义

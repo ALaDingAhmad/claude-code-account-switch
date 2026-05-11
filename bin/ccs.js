@@ -268,16 +268,32 @@ function cmdWebStop() {
 function printShareInvite(actualPort, bindAddr) {
   const cfg = share.getShareConfig();
   const ip = bindAddr === '0.0.0.0' ? getLocalIPv4() : (bindAddr || '127.0.0.1');
-  const url = `http://${ip}:${actualPort}`;
+  const localUrl = `http://${ip}:${actualPort}`;
   console.log('');
   console.log('=== 共享同步信息 ===');
-  console.log(`URL    : ${url}`);
-  console.log(`Secret : ${cfg.secret}`);
-  console.log(`角色   : ${cfg.peerUrl ? '从节点（轮询 ' + cfg.peerUrl + '）' : '主节点（等待从节点访问）'}`);
-  console.log('');
-  console.log('在从节点执行（任选其一）：');
-  console.log(`  ccs share enable --peer ${url} --secret ${cfg.secret}`);
-  console.log(`  ccs web        # 启动从节点 web 后自动同步`);
+
+  if (cfg.peerUrl) {
+    // 本机是从节点
+    console.log(`本机角色  : 从节点（每 ${cfg.intervalMs / 1000}s 轮询主节点）`);
+    console.log(`本机地址  : ${localUrl}`);
+    console.log(`主节点 URL: ${cfg.peerUrl}`);
+    console.log(`共享密钥  : ${cfg.secret}`);
+    console.log('');
+    console.log(`⚠ 请确保主节点 ${cfg.peerUrl} 已启动 ccs web 且 share 已启用并使用同一密钥。`);
+    console.log('  若主节点尚未启动，在主节点那台机器上运行（任选其一）：');
+    console.log(`    ccs web share                       # 一键启动 + 启用 share（主节点）`);
+    console.log(`    ccs share enable --secret ${cfg.secret}`);
+    console.log(`    ccs web ${new URL(cfg.peerUrl).port || 7899}                          # 启动 web`);
+  } else {
+    // 本机是主节点
+    console.log(`本机角色  : 主节点（被动响应，等待从节点访问）`);
+    console.log(`本机 URL  : ${localUrl}`);
+    console.log(`共享密钥  : ${cfg.secret}`);
+    console.log('');
+    console.log('在从节点那台机器上运行：');
+    console.log(`  ccs share enable --peer ${localUrl} --secret ${cfg.secret}`);
+    console.log(`  ccs web        # 启动从节点 web 后自动 30s 一轮同步`);
+  }
   console.log('');
 }
 
