@@ -297,26 +297,29 @@ async function syncOnce(log = () => {}) {
       continue;
     }
     if (localAcct.hash === peerAcct.hash) continue;
-    // hash 不同必有差异，必须分出方向同步。
-    // 决策序：updatedAt 差值 > 容差 → 用 updatedAt；否则 OAuth 看 expiresAt（续期一定向后跳），
-    // 实在打平就 fallback 拉 peer（避免主从都说自己新的死循环）。
-    const localUp = new Date(localAcct.updatedAt || 0).getTime();
-    const peerUp = new Date(peerAcct.updatedAt || 0).getTime();
-    const localExp = localAcct.expiresAt || 0;
-    const peerExp = peerAcct.expiresAt || 0;
-    let direction;
-    if (peerUp > localUp + TOLERANCE_MS) direction = 'pull';
-    else if (localUp > peerUp + TOLERANCE_MS) direction = 'push';
-    else if (peerExp > localExp) direction = 'pull';
-    else if (localExp > peerExp) direction = 'push';
-    else direction = 'pull';  // 真打平：拉对端，避免循环 push
+    // hash 不同必有差异，决策方向：
+    //   OAuth：按 expiresAt（access token 续期必向后跳 8h，单调递增，是真版本号）
+    //   API Key：按 updatedAt（无 expiresAt，靠 import/edit 时间作为版本）
+    //   平手 fallback 拉对端，避免双方循环 push
+    const isOauth = (localAcct.type || peerAcct.type) === 'oauth' || (!localAcct.type && !peerAcct.type);
+    let localVer, peerVer, label;
+    if (isOauth) {
+      localVer = localAcct.expiresAt || 0;
+      peerVer = peerAcct.expiresAt || 0;
+      label = 'expiresAt';
+    } else {
+      localVer = new Date(localAcct.updatedAt || 0).getTime();
+      peerVer = new Date(peerAcct.updatedAt || 0).getTime();
+      label = 'updatedAt';
+    }
+    const direction = peerVer > localVer ? 'pull' : localVer > peerVer ? 'push' : 'pull';
 
     if (direction === 'pull') {
       try {
         const detail = await callPeer(cfg.peerUrl, `/api/share/account?name=${encodeURIComponent(name)}`, cfg.secret);
         applyAccountDetail(detail);
         pulled++;
-        log(`pulled "${name}" (updatedAt Δ${peerUp - localUp}ms, expiresAt Δ${peerExp - localExp}ms)`);
+        log(`pulled "${name}" (peer ${label} bigger by ${peerVer - localVer})`);
       } catch (e) {
         log(`pull "${name}" failed: ${e.message}`);
       }
@@ -325,7 +328,7 @@ async function syncOnce(log = () => {}) {
       try {
         await callPeer(cfg.peerUrl, '/api/share/account', cfg.secret, { method: 'POST', body: detail });
         pushed++;
-        log(`pushed "${name}" (updatedAt Δ${localUp - peerUp}ms, expiresAt Δ${localExp - peerExp}ms)`);
+        log(`pushed "${name}" (local ${label} bigger by ${localVer - peerVer})`);
       } catch (e) {
         log(`push "${name}" failed: ${e.message}`);
       }
