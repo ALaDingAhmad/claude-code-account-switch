@@ -282,7 +282,7 @@ function startWebServer(port, openBrowser, onReady) {
       sharePeerUrl: cfg?.peerUrl || '',
     });
     const url = `http://${bind === '0.0.0.0' ? '127.0.0.1' : bind}:${actualPort}`;
-    const role = cfg?.enabled ? (cfg.peerUrl ? 'share-sync ACTIVE, no idle timeout' : 'share-sync PASSIVE, no idle timeout') : 'idle ' + (IDLE_TIMEOUT_MS / 60000) + ' min';
+    const role = cfg?.enabled ? (cfg.peerUrl ? 'share-sync 从节点, no idle timeout' : 'share-sync 主节点, no idle timeout') : 'idle ' + (IDLE_TIMEOUT_MS / 60000) + ' min';
     if (actualPort !== port) {
       console.log(`Port ${port} was in use, switched to ${actualPort}.`);
     }

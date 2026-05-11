@@ -129,7 +129,7 @@ function shareStatus() {
   console.log('Share sync 配置：');
   console.log(`  enabled   : ${cfg.enabled}`);
   console.log(`  bind      : ${cfg.bindAddress}`);
-  console.log(`  peer      : ${cfg.peerUrl || '(passive，被动方)'}`);
+  console.log(`  peer      : ${cfg.peerUrl || '(none，本机为主节点)'}`);
   console.log(`  secret    : ${cfg.secret ? cfg.secret.slice(0, 6) + '...' + cfg.secret.slice(-4) : '(empty)'}`);
   console.log(`  interval  : ${cfg.intervalMs}ms`);
   console.log(`  last sync : ${cfg.lastSyncAt || 'never'}`);
@@ -154,13 +154,13 @@ function shareEnable(opts) {
   const cfg = share.setShareConfig(patch);
   console.log('Share sync 已启用：');
   console.log(`  bind     : ${cfg.bindAddress}`);
-  console.log(`  peer     : ${cfg.peerUrl || '(passive，被动方，等待对端访问)'}`);
+  console.log(`  peer     : ${cfg.peerUrl || '(none，本机为主节点，等待从节点访问)'}`);
   console.log(`  interval : ${cfg.intervalMs}ms`);
   if (!cfg.peerUrl) {
-    console.log('  当前为被动方，仅响应对端请求，不主动发起。');
+    console.log('  当前为主节点，仅响应从节点请求，不主动发起。');
   }
   console.log('');
-  console.log('Secret（复制到对端 --secret 参数）:');
+  console.log('Secret（复制到从节点 --secret 参数）:');
   console.log(cfg.secret);
 }
 
@@ -273,11 +273,11 @@ function printShareInvite(actualPort, bindAddr) {
   console.log('=== 共享同步信息 ===');
   console.log(`URL    : ${url}`);
   console.log(`Secret : ${cfg.secret}`);
-  console.log(`角色   : ${cfg.peerUrl ? '主动方（轮询 ' + cfg.peerUrl + '）' : '被动方（等待对端访问）'}`);
+  console.log(`角色   : ${cfg.peerUrl ? '从节点（轮询 ' + cfg.peerUrl + '）' : '主节点（等待从节点访问）'}`);
   console.log('');
-  console.log('在对端执行（任选其一）：');
+  console.log('在从节点执行（任选其一）：');
   console.log(`  ccs share enable --peer ${url} --secret ${cfg.secret}`);
-  console.log(`  ccs web        # 启动对端 web 后自动同步`);
+  console.log(`  ccs web        # 启动从节点 web 后自动同步`);
   console.log('');
 }
 
@@ -313,7 +313,7 @@ function printRuntimeInfo() {
   const web = readWebPid();
   if (web) {
     const role = web.shareEnabled
-      ? (web.sharePeerUrl ? 'share-sync ACTIVE' : 'share-sync PASSIVE')
+      ? (web.sharePeerUrl ? 'share-sync 从节点' : 'share-sync 主节点')
       : 'normal';
     const url = `http://${web.bind === '0.0.0.0' ? '127.0.0.1' : web.bind}:${web.port}`;
     console.log(`Web service       : running ${url} (PID ${web.pid}, ${role})`);
@@ -322,7 +322,7 @@ function printRuntimeInfo() {
   }
   const cfg = share.getShareConfig();
   if (cfg?.enabled) {
-    const peer = cfg.peerUrl ? `peer=${cfg.peerUrl}` : 'passive (no peer)';
+    const peer = cfg.peerUrl ? `从节点 peer=${cfg.peerUrl}` : '主节点（无 peer，被访问方）';
     console.log(`Share sync        : enabled, ${peer}, interval=${cfg.intervalMs}ms`);
     if (cfg.lastSyncAt) {
       const r = cfg.lastResult ? `pulled=${cfg.lastResult.pulled || 0}, pushed=${cfg.lastResult.pushed || 0}` : 'none';

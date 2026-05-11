@@ -264,7 +264,7 @@ function applyAccountDetail(detail) {
 async function syncOnce(log = () => {}) {
   const cfg = getShareConfig();
   if (!cfg?.enabled) return { skipped: 'disabled' };
-  if (!cfg.peerUrl) return { skipped: 'passive (no peer url)' };
+  if (!cfg.peerUrl) return { skipped: '主节点模式（无 peer URL，不主动同步）' };
   if (!cfg.secret) return { skipped: 'no secret' };
 
   let peer;
@@ -351,7 +351,7 @@ function startDaemon(log = console.log) {
   const cfg = getShareConfig();
   if (!cfg?.enabled) return false;
   if (!cfg.peerUrl) {
-    log(`[share] passive mode: API exposed, no peer URL configured`);
+    log(`[share] 主节点模式：暴露 API 等待从节点访问（peerUrl 未配置）`);
     return false;
   }
   const interval = Math.max(5000, cfg.intervalMs || DEFAULT_INTERVAL_MS);
