@@ -26,11 +26,11 @@
   "author": "baiqiang",
   "repository": {
     "type": "git",
-    "url": "git+https://gitee.com/superas/claude-code-account-switch.git"
+    "url": "git+https://github.com/ALaDingAhmad/claude-code-account-switch.git"
   },
-  "homepage": "https://gitee.com/superas/claude-code-account-switch",
+  "homepage": "https://github.com/ALaDingAhmad/claude-code-account-switch",
   "bugs": {
-    "url": "https://gitee.com/superas/claude-code-account-switch/issues"
+    "url": "https://github.com/ALaDingAhmad/claude-code-account-switch/issues"
   },
   "files": [
     "bin/",

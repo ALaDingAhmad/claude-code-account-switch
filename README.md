@@ -1,8 +1,16 @@
 # CCS - Claude Code Account Switcher
 
-Windows / macOS CLI 工具，通过备份和还原 Claude Code 凭证（Windows 文件 / macOS Keychain）及 `~/.claude.json` 中的账号字段，实现 Claude Code 多账号一键切换。支持 OAuth 和 API Key 两种账号类型，提供命令行和 Web UI 两种操作方式。
+[![npm version](https://img.shields.io/npm/v/claude-code-account-switch.svg)](https://www.npmjs.com/package/claude-code-account-switch)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/node/v/claude-code-account-switch.svg)](https://nodejs.org)
+
+Windows / macOS / Linux / WSL CLI 工具，通过备份和还原 Claude Code 凭证（Windows/Linux 文件、macOS Keychain）及 `~/.claude.json` 中的账号字段，实现 Claude Code 多账号一键切换。支持 OAuth 和 API Key 两种账号类型，命令行和 Web UI 两种操作方式，支持多端通过 LAN 共享同步登录态。
 
 不代理请求，不切换 profile 目录，不影响 `.claude/sessions`、`history.jsonl` 和项目状态。
+
+- npm：<https://www.npmjs.com/package/claude-code-account-switch>
+- GitHub：<https://github.com/ALaDingAhmad/claude-code-account-switch>
+- Gitee 镜像：<https://gitee.com/superas/claude-code-account-switch>
 
 ## 原理
 
@@ -256,7 +264,7 @@ node scripts/refresh-token.js
 
 ## 版本变更
 
-- **v3.7.2**：package.json 元信息完善（description 反映多平台支持，加 repository/homepage/bugs 字段，扩展 keywords）
+- **v3.7.2**：package.json 元信息完善（description 反映多平台支持，repository/homepage/bugs 指向 GitHub，扩展 keywords）；README 加徽章和多仓库链接
 - **v3.7.1**：v3.7.0 后续打磨
   - `ccs web share` 改为后台模式（spawn detached），启动后立即返回终端，打印 PID 和停止方法
   - `ccs web stop` 命令读 pid 文件 SIGTERM
