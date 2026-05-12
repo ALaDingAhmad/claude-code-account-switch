@@ -178,15 +178,25 @@ function localSnapshot() {
   for (const [name, acct] of Object.entries(config.accounts || {})) {
     accounts[name] = {
       type: acct.type || 'oauth',
+      createdAt: acct.createdAt || acct.importedAt || null,
       updatedAt: acct.updatedAt || null,
       expiresAt: acct.expiresAt || null,
       hash: hashAccount(acct, name),
+    };
+  }
+  // 墓碑：只暴露名字、deletedAt、createdAt（用于双方决策）
+  const deletedAccounts = {};
+  for (const [name, tomb] of Object.entries(config.deletedAccounts || {})) {
+    deletedAccounts[name] = {
+      deletedAt: tomb.deletedAt || null,
+      createdAt: tomb.createdAt || null,
     };
   }
   return {
     activeAccount: config.activeAccount || null,
     lastSwitchedAt: config.lastSwitchedAt || null,
     accounts,
+    deletedAccounts,
     accountCount: Object.keys(accounts).length,
   };
 }
@@ -200,6 +210,7 @@ function localAccountDetail(name) {
     return {
       name,
       type: 'apikey',
+      createdAt: acct.createdAt || acct.importedAt || null,
       updatedAt: acct.updatedAt,
       importedAt: acct.importedAt,
       authToken: acct.authToken,
@@ -212,6 +223,7 @@ function localAccountDetail(name) {
   return {
     name,
     type: 'oauth',
+    createdAt: acct.createdAt || acct.importedAt || null,
     updatedAt: acct.updatedAt,
     importedAt: acct.importedAt,
     accessTokenMasked: acct.accessTokenMasked,
@@ -233,7 +245,21 @@ function applyAccountDetail(detail) {
   const name = sanitizeName(detail.name);
   const config = readConfig();
   config.accounts = config.accounts || {};
+  config.deletedAccounts = config.deletedAccounts || {};
 
+  // 墓碑保护：若本端已有墓碑，仅当 detail.createdAt > 墓碑 deletedAt 才允许复活
+  const tomb = config.deletedAccounts[name];
+  const detailCreatedAt = detail.createdAt || detail.importedAt || null;
+  if (tomb && tomb.deletedAt) {
+    if (!detailCreatedAt || detailCreatedAt <= tomb.deletedAt) {
+      // 本端墓碑更新，拒绝复活——这是"对端推过来的是删除前的旧账号"
+      return { applied: false, reason: 'tombstone-protected' };
+    }
+    // 复活：清掉墓碑
+    delete config.deletedAccounts[name];
+  }
+
+  const now = new Date().toISOString();
   if (detail.type === 'apikey') {
     config.accounts[name] = {
       type: 'apikey',
@@ -241,8 +267,9 @@ function applyAccountDetail(detail) {
       authToken: detail.authToken,
       authTokenMasked: detail.authTokenMasked || maskToken(detail.authToken),
       baseUrl: detail.baseUrl || null,
-      importedAt: detail.importedAt || new Date().toISOString(),
-      updatedAt: detail.updatedAt || new Date().toISOString(),
+      createdAt: detailCreatedAt || now,
+      importedAt: detail.importedAt || now,
+      updatedAt: detail.updatedAt || now,
     };
   } else {
     if (detail.credentials) {
@@ -263,8 +290,9 @@ function applyAccountDetail(detail) {
       organizationName: detail.organizationName,
       accountUuid: detail.accountUuid,
       userID: detail.userID,
-      importedAt: detail.importedAt || new Date().toISOString(),
-      updatedAt: detail.updatedAt || new Date().toISOString(),
+      createdAt: detailCreatedAt || now,
+      importedAt: detail.importedAt || now,
+      updatedAt: detail.updatedAt || now,
     };
   }
   saveConfig(config);
@@ -280,6 +308,7 @@ function applyAccountDetail(detail) {
       console.log(`[share] applied ${name} but failed to refresh live: ${e.message}`);
     }
   }
+  return { applied: true };
 }
 
 // ── Sync engine ─────────────────────────────────────────────────────────────
@@ -301,77 +330,146 @@ async function syncOnce(log = () => {}) {
   const local = localSnapshot();
   let pulled = 0;
   let pushed = 0;
+  let deletePulled = 0;
+  let deletePushed = 0;
   const peerAccounts = peer.accounts || {};
   const localAccounts = local.accounts;
+  const peerDeleted = peer.deletedAccounts || {};
+  const localDeleted = local.deletedAccounts || {};
 
-  // 1) peer 账号 → 本地无 / 哈希不一致
-  for (const name of Object.keys(peerAccounts)) {
-    const peerAcct = peerAccounts[name];
-    const localAcct = localAccounts[name];
-    if (!localAcct) {
-      try {
-        const detail = await callPeer(cfg.peerUrl, `/api/share/account?name=${encodeURIComponent(name)}`, cfg.secret);
-        applyAccountDetail(detail);
-        pulled++;
-        log(`pulled new account: ${name}`);
-      } catch (e) {
-        log(`pull "${name}" failed: ${e.message}`);
+  // 收集所有需要处理的账号名（活+死并集）
+  const allNames = new Set([
+    ...Object.keys(peerAccounts), ...Object.keys(localAccounts),
+    ...Object.keys(peerDeleted),  ...Object.keys(localDeleted),
+  ]);
+
+  for (const name of allNames) {
+    const pa = peerAccounts[name];   // 对端活账号
+    const la = localAccounts[name];  // 本端活账号
+    const pd = peerDeleted[name];    // 对端墓碑
+    const ld = localDeleted[name];   // 本端墓碑
+
+    // ─── 双方都活着：按内容版本号决策（原有逻辑）─────────────────────────
+    if (la && pa) {
+      if (la.hash === pa.hash) continue;
+      const isOauth = (la.type || pa.type) === 'oauth' || (!la.type && !pa.type);
+      let localVer, peerVer, label;
+      if (isOauth) {
+        localVer = la.expiresAt || 0;
+        peerVer = pa.expiresAt || 0;
+        label = 'expiresAt';
+      } else {
+        localVer = new Date(la.updatedAt || 0).getTime();
+        peerVer = new Date(pa.updatedAt || 0).getTime();
+        label = 'updatedAt';
+      }
+      const direction = peerVer > localVer ? 'pull' : localVer > peerVer ? 'push' : 'pull';
+      if (direction === 'pull') {
+        try {
+          const detail = await callPeer(cfg.peerUrl, `/api/share/account?name=${encodeURIComponent(name)}`, cfg.secret);
+          const r = applyAccountDetail(detail);
+          if (r?.applied !== false) { pulled++; log(`pulled "${name}" (peer ${label} bigger by ${peerVer - localVer})`); }
+        } catch (e) { log(`pull "${name}" failed: ${e.message}`); }
+      } else {
+        const detail = localAccountDetail(name);
+        try {
+          await callPeer(cfg.peerUrl, '/api/share/account', cfg.secret, { method: 'POST', body: detail });
+          pushed++;
+          log(`pushed "${name}" (local ${label} bigger by ${localVer - peerVer})`);
+        } catch (e) { log(`push "${name}" failed: ${e.message}`); }
       }
       continue;
     }
-    if (localAcct.hash === peerAcct.hash) continue;
-    // hash 不同必有差异，决策方向：
-    //   OAuth：按 expiresAt（access token 续期必向后跳 8h，单调递增，是真版本号）
-    //   API Key：按 updatedAt（无 expiresAt，靠 import/edit 时间作为版本）
-    //   平手 fallback 拉对端，避免双方循环 push
-    const isOauth = (localAcct.type || peerAcct.type) === 'oauth' || (!localAcct.type && !peerAcct.type);
-    let localVer, peerVer, label;
-    if (isOauth) {
-      localVer = localAcct.expiresAt || 0;
-      peerVer = peerAcct.expiresAt || 0;
-      label = 'expiresAt';
-    } else {
-      localVer = new Date(localAcct.updatedAt || 0).getTime();
-      peerVer = new Date(peerAcct.updatedAt || 0).getTime();
-      label = 'updatedAt';
-    }
-    const direction = peerVer > localVer ? 'pull' : localVer > peerVer ? 'push' : 'pull';
 
-    if (direction === 'pull') {
+    // ─── 仅对端有活账号：本端无（或墓碑）─────────────────────────────────
+    if (pa && !la) {
+      // 本端墓碑保护：peer createdAt 必须晚于本端 deletedAt
+      if (ld && ld.deletedAt && (!pa.createdAt || pa.createdAt <= ld.deletedAt)) {
+        // 反过来通知对端删（本端墓碑是权威的）
+        try {
+          await callPeer(cfg.peerUrl, '/api/share/delete', cfg.secret, {
+            method: 'POST',
+            body: { name, deletedAt: ld.deletedAt },
+          });
+          deletePushed++;
+          log(`pushed delete "${name}" (local tombstone deletedAt=${ld.deletedAt} >= peer createdAt=${pa.createdAt || 'unknown'})`);
+        } catch (e) { log(`push-delete "${name}" failed: ${e.message}`); }
+        continue;
+      }
+      // 拉新账号（applyAccountDetail 内部还会做一次墓碑保护，双保险）
       try {
         const detail = await callPeer(cfg.peerUrl, `/api/share/account?name=${encodeURIComponent(name)}`, cfg.secret);
-        applyAccountDetail(detail);
-        pulled++;
-        log(`pulled "${name}" (peer ${label} bigger by ${peerVer - localVer})`);
-      } catch (e) {
-        log(`pull "${name}" failed: ${e.message}`);
+        const r = applyAccountDetail(detail);
+        if (r?.applied !== false) { pulled++; log(`pulled new account: ${name}`); }
+        else log(`refused to revive "${name}" (tombstone-protected)`);
+      } catch (e) { log(`pull "${name}" failed: ${e.message}`); }
+      continue;
+    }
+
+    // ─── 仅本端有活账号：对端无（或墓碑）─────────────────────────────────
+    if (la && !pa) {
+      // 对端墓碑保护：本端 createdAt 必须晚于对端 deletedAt
+      if (pd && pd.deletedAt && (!la.createdAt || la.createdAt <= pd.deletedAt)) {
+        // 本端被对端删了，应当本地删除（墓碑较新，权威）
+        try {
+          const Store = require('./store');
+          new Store().applyDeleteAccount(name, pd.deletedAt);
+          deletePulled++;
+          log(`pulled delete "${name}" (peer tombstone deletedAt=${pd.deletedAt} >= local createdAt=${la.createdAt || 'unknown'})`);
+        } catch (e) { log(`pull-delete "${name}" failed: ${e.message}`); }
+        continue;
       }
-    } else {
+      // 推到对端
       const detail = localAccountDetail(name);
       try {
         await callPeer(cfg.peerUrl, '/api/share/account', cfg.secret, { method: 'POST', body: detail });
         pushed++;
-        log(`pushed "${name}" (local ${label} bigger by ${localVer - peerVer})`);
-      } catch (e) {
-        log(`push "${name}" failed: ${e.message}`);
+        log(`pushed new account: ${name}`);
+      } catch (e) { log(`push "${name}" failed: ${e.message}`); }
+      continue;
+    }
+
+    // ─── 双方都已删（墓碑）：保留较新的，发送给对方（让对方知道）────────────
+    if (ld && pd) {
+      if ((ld.deletedAt || '') > (pd.deletedAt || '')) {
+        try {
+          await callPeer(cfg.peerUrl, '/api/share/delete', cfg.secret, {
+            method: 'POST',
+            body: { name, deletedAt: ld.deletedAt },
+          });
+          // 不计 deletePushed，因为对端已是墓碑，等于无操作
+        } catch (e) { log(`push-delete "${name}" failed: ${e.message}`); }
       }
+      // 本端 deletedAt 较老或相等：什么也不做（对端会自己 push 过来或保持现状）
+      continue;
+    }
+
+    // ─── 仅本端有墓碑：对端完全没听过 → 推墓碑过去（防对端将来再导入同名又被推回）
+    if (ld && !pa && !pd) {
+      try {
+        await callPeer(cfg.peerUrl, '/api/share/delete', cfg.secret, {
+          method: 'POST',
+          body: { name, deletedAt: ld.deletedAt },
+        });
+        deletePushed++;
+        log(`pushed tombstone "${name}"`);
+      } catch (e) { log(`push-tombstone "${name}" failed: ${e.message}`); }
+      continue;
+    }
+
+    // ─── 仅对端有墓碑：本端完全没听过 → 拉墓碑过来 ───────────────────────
+    if (pd && !la && !ld) {
+      try {
+        const Store = require('./store');
+        new Store().applyDeleteAccount(name, pd.deletedAt);
+        deletePulled++;
+        log(`pulled tombstone "${name}"`);
+      } catch (e) { log(`pull-tombstone "${name}" failed: ${e.message}`); }
+      continue;
     }
   }
 
-  // 2) 本地账号 → peer 无
-  for (const name of Object.keys(localAccounts)) {
-    if (peerAccounts[name]) continue;
-    const detail = localAccountDetail(name);
-    try {
-      await callPeer(cfg.peerUrl, '/api/share/account', cfg.secret, { method: 'POST', body: detail });
-      pushed++;
-      log(`pushed new account: ${name}`);
-    } catch (e) {
-      log(`push "${name}" failed: ${e.message}`);
-    }
-  }
-
-  const result = { pulled, pushed };
+  const result = { pulled, pushed, deletePulled, deletePushed };
   setShareConfig({
     lastSyncAt: new Date().toISOString(),
     lastResult: result,
