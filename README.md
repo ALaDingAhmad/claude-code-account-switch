@@ -195,6 +195,13 @@ ccs status
 
 ## 版本变更
 
+- **v3.8.1**：状态栏脚本 mac 兼容 + 颜色/显示修复
+  - mac 上 OAuth 凭证存在 Keychain（不是文件）；usage/profile 两段 Python 加 macOS Keychain fallback（`security find-generic-password -s "Claude Code-credentials" -a $USER -w`），不再只读文件
+  - 颜色码 `\e[` 全部改为 `\033[`（13 处），兼容 macOS 系统自带 bash 3.2（不识别 `\e`）
+  - 修复金额双美元 bug（`$$1.2345`）—— Python 已加 `$` 前缀，shell printf 再加一次造成重复
+  - 金额颜色由浅白 `\033[37m`（深色主题看不清）改为 256 色棕 `\033[38;5;130m`
+  - 新增 `scripts/test-mac-api.sh`：单测 mac 上 token 读取 + profile/usage API 连通性
+  - 新增 `scripts/test-mac-statusline.sh`：模拟 Claude Code stdin JSON 跑完整脚本，验证渲染结果
 - **v3.8.0**：账号删除多端同步（修复 ccs web share 被恢复 bug）
   - **数据结构**：`~/.ccs/config.json` 新增 `deletedAccounts` 段存放墓碑；账号新增 `createdAt` 字段做版本号
   - **删除语义**：`ccs remove` 改为把账号挪到 `deletedAccounts`、credentials 文件直接删；禁止删除当前 active 账号（需先切走）
