@@ -41,6 +41,11 @@ async function main() {
 
   if (cmd === '-') { cmdClearCurrent(); return; }
   if (cmd === '-h' || cmd === '--help') { printHelp(); return; }
+  if (cmd === '-v' || cmd === '--version') {
+    const pkg = require(path.join(__dirname, '..', 'package.json'));
+    console.log(pkg.version);
+    return;
+  }
 
   if (COMMANDS.has(cmd)) {
     await dispatch(cmd, args.slice(1));

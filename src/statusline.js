@@ -65,8 +65,15 @@ function install() {
   }
   ensureDir(CLAUDE_DIR);
 
-  // 复制脚本（每次安装覆盖，使用最新版本）
-  fs.copyFileSync(SOURCE_PATH, TARGET_PATH);
+  // 复制脚本时把 __CCS_VERSION__ 占位符替换为 package.json 的真实版本号
+  // 这样状态栏每次刷新都显示当前装的 ccs 版本，零运行时开销
+  const version = (() => {
+    try { return require(path.join(__dirname, '..', 'package.json')).version || ''; }
+    catch { return ''; }
+  })();
+  const raw = fs.readFileSync(SOURCE_PATH, 'utf8');
+  const patched = raw.replace(/__CCS_VERSION__/g, version);
+  fs.writeFileSync(TARGET_PATH, patched);
   try { fs.chmodSync(TARGET_PATH, 0o755); } catch { /* non-posix */ }
 
   const settings = readSettings();

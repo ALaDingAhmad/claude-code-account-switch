@@ -195,6 +195,10 @@ ccs status
 
 ## 版本变更
 
+- **v3.8.3**：CLI 加 `--version`/`-v`，状态栏显示 ccs 版本
+  - `ccs --version` / `ccs -v` 输出 package.json 里的版本号
+  - 状态栏脚本第一行末尾灰色显示当前安装的 ccs 版本（如 `(ccs 3.8.3)`），方便排查"用的是新版还是旧版"
+  - 实现：源脚本里写占位符 `__CCS_VERSION__`，`ccs statusline install` 时把它替换为真实版本号；零运行时开销
 - **v3.8.2**：状态栏脚本自动切账号 + 用量表
   - 5h ≥ 99% 时自动切到非 active 且 5h<99% 的 OAuth 账号；全满则不切（等手动或自然 reset）
   - 维护 `~/.ccs/account-usage.json` 用量表：每次状态栏 tick 更新 active 数据；评估候选时 `now < resets_at` 用表，过期/缺失则用 ccs 快照 token 调 `/api/oauth/usage` 重查；401/网络失败该候选跳过

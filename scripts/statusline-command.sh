@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Claude Code 状态栏脚本
 
+# 安装时由 ccs statusline install 替换为真实版本号；源码里保持占位
+CCS_VERSION="__CCS_VERSION__"
+
 input=$(cat)
 
 parse() {
@@ -129,6 +132,12 @@ colored_user_host=$(printf '\033[32m%s@%s\033[0m' "$(whoami)" "$(hostname 2>/dev
 [ -z "$cwd" ] && cwd="$(pwd)"
 colored_dir=$(printf '\033[33m%s\033[0m' "$cwd")
 line1="${colored_user_host}${colored_msystem} ${colored_dir}"
+# 占位符未被替换时（如直接跑源脚本）不显示。
+# 这里把占位符串成两段（"__CCS_" + "VERSION__"），避免被 install 时的 sed 一起替换掉
+_VERSION_PLACEHOLDER="__CCS_""VERSION__"
+if [ -n "$CCS_VERSION" ] && [ "$CCS_VERSION" != "$_VERSION_PLACEHOLDER" ]; then
+  line1="${line1} $(printf '\033[90m(ccs %s)\033[0m' "$CCS_VERSION")"
+fi
 
 # === 第二行：模型 | ctx | 费用 | 5h rate ===
 line2=""
