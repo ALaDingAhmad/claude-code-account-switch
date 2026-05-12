@@ -191,7 +191,7 @@ async function cmdWeb(rest) {
   let isShare = false;
   if (rest[0] === 'share') { isShare = true; rest = rest.slice(1); }
 
-  let port = WEB_DEFAULT_PORT;
+  let port = null;
   let peer = null;
   let bind = null;
   let secret = null;
@@ -203,6 +203,8 @@ async function cmdWeb(rest) {
     else if (k === '--secret') { secret = rest[++i] || null; }
     else throw new Error(`unknown option: ${k}`);
   }
+  // 没显式给端口时，优先用上次成功监听的端口；否则用默认 7899
+  if (port === null) port = share.getLastWebPort() || WEB_DEFAULT_PORT;
   if (isNaN(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid port: ${port}`);
   }
