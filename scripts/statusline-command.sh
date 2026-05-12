@@ -68,7 +68,7 @@ try:
         cache = json.load(open(CACHE, encoding='utf-8'))
         if cache.get('token_hash') == token_hash and time.time() - cache.get('ts', 0) < TTL:
             d = cache['data']
-            print(d['five_hour'], d['seven_day'])
+            print(d['five_hour'], d['seven_day'], d.get('five_hour_reset', ''))
             sys.exit()
 
     req = urllib.request.Request(
@@ -79,14 +79,16 @@ try:
     data = {
         'five_hour': resp.get('five_hour', {}).get('utilization', ''),
         'seven_day': resp.get('seven_day', {}).get('utilization', ''),
+        'five_hour_reset': resp.get('five_hour', {}).get('resets_at', ''),
     }
     json.dump({'token_hash': token_hash, 'ts': time.time(), 'data': data}, open(CACHE, 'w'))
-    print(data['five_hour'], data['seven_day'])
+    print(data['five_hour'], data['seven_day'], data['five_hour_reset'])
 except Exception:
-    print('', '')
+    print('', '', '')
 " 2>/dev/null)
 rate5h_live=$(echo "$usage_info" | awk '{print $1}')
 rate7d_live=$(echo "$usage_info" | awk '{print $2}')
+rate5h_reset=$(echo "$usage_info" | awk '{print $3}')
 [ -n "$rate5h_live" ] && rate5h="$rate5h_live"
 [ -n "$rate7d_live" ] && rate7d="$rate7d_live"
 
@@ -232,4 +234,169 @@ if [ -n "$line3" ]; then
   printf '%s\n%s\n%s' "$line1" "$line2" "$line3"
 else
   printf '%s\n%s' "$line1" "$line2"
+fi
+
+# === 用量表维护 + 自动切换 ===
+# 用量表: ~/.ccs/account-usage.json
+#   每个账号: { five_hour, resets_at, checked_at }
+# 行为:
+#   - 每次状态栏 tick 都更新当前 active 的用量
+#   - 仅当 active 5h >= 99 时进入切换决策：
+#       1. 评估每个候选 OAuth：表里数据有效（now < resets_at）就用；过期或缺失就调 API 刷新
+#       2. 任意候选 5h < 99 → 切到它（按 config.accounts 顺序首个）
+#       3. 全满 → 不切（B 方案），用户自己等或手动处理
+#   - 关闭整个功能: touch ~/.ccs/auto-switch.disabled
+if [ ! -f "$HOME/.ccs/auto-switch.disabled" ] && [ -n "$rate5h" ]; then
+  (python3 - "$rate5h" "$rate5h_reset" <<'PYEOF' &) 2>/dev/null
+import json, os, sys, subprocess, urllib.request, urllib.error
+from datetime import datetime, timezone
+
+cur_5h_str  = sys.argv[1] if len(sys.argv) > 1 else ''
+cur_reset   = sys.argv[2] if len(sys.argv) > 2 else ''
+
+CFG   = os.path.expanduser('~/.ccs/config.json')
+USAGE = os.path.expanduser('~/.ccs/account-usage.json')
+LOG   = os.path.expanduser('~/.ccs/auto-switch.log')
+ACC_DIR = os.path.expanduser('~/.ccs/accounts')
+
+THRESHOLD = 99  # 5h 达到 99% 才触发切换
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, 'a', encoding='utf-8') as f:
+            f.write(f"[{datetime.now().strftime('%F %T')}] {msg}\n")
+    except Exception:
+        pass
+
+def parse_iso(s):
+    if not s: return None
+    try:
+        return datetime.fromisoformat(s.replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+def save_usage(table):
+    try:
+        os.makedirs(os.path.dirname(USAGE), exist_ok=True)
+        json.dump(table, open(USAGE, 'w', encoding='utf-8'), indent=2)
+    except Exception as e:
+        log(f'write usage table failed: {e}')
+
+def load_usage():
+    if not os.path.exists(USAGE): return {}
+    try:
+        return json.load(open(USAGE, encoding='utf-8')) or {}
+    except Exception:
+        return {}
+
+def read_account_token(name):
+    """从 ccs 快照读账号的 OAuth access token (mac 也是这个文件，不是 Keychain)"""
+    p = os.path.join(ACC_DIR, f'{name}.credentials.json')
+    if not os.path.exists(p): return None
+    try:
+        return json.load(open(p, encoding='utf-8'))['claudeAiOauth']['accessToken']
+    except Exception:
+        return None
+
+def query_usage_for_token(token):
+    """调 /api/oauth/usage 查一个 token 的当前用量。
+    返回 (five_hour:float, resets_at:str) 或 None"""
+    try:
+        req = urllib.request.Request(
+            'https://api.anthropic.com/api/oauth/usage',
+            headers={'Authorization': f'Bearer {token}',
+                     'anthropic-beta': 'oauth-2025-04-20',
+                     'Accept': 'application/json'})
+        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
+        fh = resp.get('five_hour') or {}
+        return float(fh.get('utilization') or 0.0), (fh.get('resets_at') or '')
+    except urllib.error.HTTPError as e:
+        log(f'API HTTP {e.code} on usage query')
+        return None
+    except Exception as e:
+        log(f'API error on usage query: {e}')
+        return None
+
+# === 读 config ===
+try:
+    cfg = json.load(open(CFG, encoding='utf-8'))
+except Exception as e:
+    log(f'read config failed: {e}')
+    sys.exit()
+
+cur = cfg.get('activeAccount')
+accounts = cfg.get('accounts') or {}
+table = load_usage()
+now = datetime.now(timezone.utc)
+now_iso = now.isoformat()
+
+# === 步骤 1: 更新 active 账号用量（每次 tick 必做）===
+try:
+    cur_5h_val = float(cur_5h_str) if cur_5h_str else None
+except Exception:
+    cur_5h_val = None
+if cur and cur_5h_val is not None:
+    table[cur] = {
+        'five_hour': cur_5h_val,
+        'resets_at': cur_reset,
+        'checked_at': now_iso,
+    }
+    save_usage(table)
+
+# === 步骤 2: 触发判定 ===
+if cur_5h_val is None or cur_5h_val < THRESHOLD:
+    sys.exit()  # 没满，不切
+
+# === 步骤 3: 评估候选 ===
+candidates = [(n, a) for n, a in accounts.items()
+              if n != cur and (a.get('type') or 'oauth') == 'oauth']
+if not candidates:
+    log(f'5h={cur_5h_val}%, no OAuth candidates to switch to')
+    sys.exit()
+
+target = None
+for name, _acct in candidates:
+    info = table.get(name)
+    reset_dt = parse_iso(info.get('resets_at')) if info else None
+    fresh = info and reset_dt and reset_dt > now
+    if not fresh:
+        # 表里数据缺失或 resets_at 已过 → 调 API 重查
+        tok = read_account_token(name)
+        if not tok:
+            log(f'skip {name}: no token snapshot')
+            continue
+        q = query_usage_for_token(tok)
+        if q is None:
+            # 401/网络等失败：跳过此候选，不更新表（保留旧值）
+            log(f'skip {name}: usage query failed')
+            continue
+        five_hour, resets_at = q
+        table[name] = {
+            'five_hour': five_hour,
+            'resets_at': resets_at,
+            'checked_at': now_iso,
+        }
+        info = table[name]
+        save_usage(table)
+
+    if info['five_hour'] < THRESHOLD:
+        target = name
+        break  # 按 config.accounts 顺序的第一个可切
+
+if not target:
+    log(f'5h={cur_5h_val}%, all candidates also full (no switch)')
+    sys.exit()
+
+# === 步骤 4: 真切换 ===
+log(f'5h={cur_5h_val}% (resets {cur_reset}), switching from {cur} to {target} (5h={table[target]["five_hour"]}%)')
+try:
+    r = subprocess.run(['ccs', target], capture_output=True, text=True, timeout=15)
+    if r.returncode == 0:
+        log(f'switched to {target} OK')
+    else:
+        log(f'switch failed rc={r.returncode}: {(r.stderr or r.stdout or "").strip()[:200]}')
+except Exception as e:
+    log(f'switch exception: {e}')
+PYEOF
 fi
