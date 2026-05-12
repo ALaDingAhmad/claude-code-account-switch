@@ -247,7 +247,8 @@ function startWebServer(port, openBrowser, onReady) {
 
     // --- Share Sync 对端互访接口（必须鉴权）---
     if (url.pathname === '/api/share/snapshot' ||
-        url.pathname === '/api/share/account') {
+        url.pathname === '/api/share/account' ||
+        url.pathname === '/api/share/delete') {
       const cfg = share.getShareConfig();
       if (!cfg?.enabled || !cfg.secret || !share.checkAuth(req, cfg.secret)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -276,6 +277,19 @@ function startWebServer(port, openBrowser, onReady) {
         try {
           const body = JSON.parse(await readBody(req));
           share.applyAccountDetail(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/share/delete') {
+        try {
+          const body = JSON.parse(await readBody(req));
+          if (!body.name) throw new Error('name required');
+          const store = new AccountStore();
+          store.applyDeleteAccount(body.name, body.deletedAt);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ ok: true }));
         } catch (e) {

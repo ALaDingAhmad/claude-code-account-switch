@@ -29,14 +29,19 @@ class AccountStore {
   }
 
   _defaultConfig() {
-    return { version: 2, activeAccount: null, lastSwitchedAt: null, accounts: {} };
+    return { version: 2, activeAccount: null, lastSwitchedAt: null, accounts: {}, deletedAccounts: {} };
   }
 
   _load() {
     if (!fileExists(CONFIG_PATH)) return this._defaultConfig();
     try {
       const c = readJson(CONFIG_PATH);
-      return { ...this._defaultConfig(), ...c, accounts: c.accounts || {} };
+      return {
+        ...this._defaultConfig(),
+        ...c,
+        accounts: c.accounts || {},
+        deletedAccounts: c.deletedAccounts || {},
+      };
     } catch {
       return this._defaultConfig();
     }
@@ -152,6 +157,7 @@ class AccountStore {
       oauthAccount: liveState.oauthAccount || null,
     });
 
+    const now = new Date().toISOString();
     this._config.accounts[n] = {
       type: 'oauth',
       name: n,
@@ -164,11 +170,12 @@ class AccountStore {
       organizationName: liveOauth.organizationName || prev.organizationName || null,
       accountUuid: liveOauth.accountUuid || prev.accountUuid || null,
       userID: liveState.userID || prev.userID || null,
-      importedAt: prev.importedAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: prev.createdAt || now,
+      importedAt: prev.importedAt || now,
+      updatedAt: now,
     };
     this._config.activeAccount = n;
-    this._config.lastSwitchedAt = new Date().toISOString();
+    this._config.lastSwitchedAt = now;
     this._save();
     return this._entry(n, this._config.accounts[n]);
   }
@@ -179,14 +186,16 @@ class AccountStore {
     if (!authToken) throw new Error('authToken is required');
 
     const prev = this._config.accounts[n] || {};
+    const now = new Date().toISOString();
     this._config.accounts[n] = {
       type: 'apikey',
       name: n,
       authToken,
       authTokenMasked: maskToken(authToken),
       baseUrl: baseUrl || null,
-      importedAt: prev.importedAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: prev.createdAt || now,
+      importedAt: prev.importedAt || now,
+      updatedAt: now,
     };
     this._switchApiKey(n, this._config.accounts[n]);
     this._config.activeAccount = n;
@@ -333,19 +342,31 @@ class AccountStore {
 
   removeAccount(name) {
     const n = sanitizeName(name);
-    if (!this._config.accounts[n]) throw new Error(`Unknown account "${n}"`);
+    const acct = this._config.accounts[n];
+    if (!acct) throw new Error(`Unknown account "${n}"`);
+    if (this._config.activeAccount === n) {
+      throw new Error(`Cannot delete active account "${n}", switch to another account first`);
+    }
 
+    // credentials/state 文件直接删（不复活）
     const snapPath = credentialsSnapshotPath(n);
     const statePath = stateSnapshotPath(n);
     try { if (fileExists(snapPath)) fs.unlinkSync(snapPath); } catch { /* ignore */ }
     try { if (fileExists(statePath)) fs.unlinkSync(statePath); } catch { /* ignore */ }
 
-    delete this._config.accounts[n];
-    if (this._config.activeAccount === n) {
-      const next = Object.keys(this._config.accounts)[0] || null;
-      this._config.activeAccount = next;
-      this._config.lastSwitchedAt = next ? new Date().toISOString() : null;
+    // 移动到 deletedAccounts，留下墓碑用于同步
+    const tomb = {
+      ...acct,
+      excluded: true,
+      deletedAt: new Date().toISOString(),
+    };
+    // 敏感数据清掉，墓碑只保留身份和时间戳
+    if (tomb.type === 'apikey') {
+      delete tomb.authToken;
     }
+    this._config.deletedAccounts = this._config.deletedAccounts || {};
+    this._config.deletedAccounts[n] = tomb;
+    delete this._config.accounts[n];
     this._save();
   }
 
@@ -434,6 +455,59 @@ class AccountStore {
             }
         : null,
     };
+  }
+
+  // ── 同步辅助：墓碑读写 ────────────────────────────────────────────────────
+  getDeletedAccounts() {
+    return this._config.deletedAccounts || {};
+  }
+
+  // 同步时 peer 通知本端"X 被删了"：把本端 accounts[name] 也移除并建墓碑
+  // 不抛错（即便本端无此账号，也照单全收建墓碑，避免后续被对端再推回来）
+  applyDeleteAccount(name, deletedAt) {
+    const n = sanitizeName(name);
+    const at = deletedAt || new Date().toISOString();
+    const acct = this._config.accounts[n];
+    // 墓碑覆盖原则：取较新 deletedAt
+    const existingTomb = (this._config.deletedAccounts || {})[n];
+    if (existingTomb && existingTomb.deletedAt && existingTomb.deletedAt >= at) return;
+
+    if (acct) {
+      // 本端还活着，移到墓碑
+      const snapPath = credentialsSnapshotPath(n);
+      const statePath = stateSnapshotPath(n);
+      try { if (fileExists(snapPath)) fs.unlinkSync(snapPath); } catch { /* ignore */ }
+      try { if (fileExists(statePath)) fs.unlinkSync(statePath); } catch { /* ignore */ }
+      const tomb = { ...acct, excluded: true, deletedAt: at };
+      if (tomb.type === 'apikey') delete tomb.authToken;
+      this._config.deletedAccounts = this._config.deletedAccounts || {};
+      this._config.deletedAccounts[n] = tomb;
+      delete this._config.accounts[n];
+      // 如果是 active，清空 active（按需要后续 UI 提示用户切换）
+      if (this._config.activeAccount === n) {
+        this._config.activeAccount = null;
+        this._config.lastSwitchedAt = at;
+      }
+    } else {
+      // 本端无此账号，直接建墓碑（防止下次对端再推回）
+      this._config.deletedAccounts = this._config.deletedAccounts || {};
+      this._config.deletedAccounts[n] = {
+        name: n,
+        excluded: true,
+        deletedAt: at,
+      };
+    }
+    this._save();
+  }
+
+  // 同步时对端推过来一个 createdAt 比本端墓碑 deletedAt 更新的活账号 → 复活
+  // 实际操作：清掉本端墓碑（让 applyAccountDetail 正常写入 accounts）
+  clearTombstone(name) {
+    const n = sanitizeName(name);
+    if (this._config.deletedAccounts && this._config.deletedAccounts[n]) {
+      delete this._config.deletedAccounts[n];
+      this._save();
+    }
   }
 }
 

@@ -57,7 +57,7 @@ Windows 双击桌面快捷方式即可启动（无 cmd 窗口）。普通模式 
 - **主节点**：HTTP 服务端，不主动发请求，只响应从节点的查询。**它是数据的权威源**（所有从节点都跟它对账）。配置里「主节点 URL」留空
 - **从节点**：每 30 秒访问主节点，按账号粒度比较 hash + updatedAt：自己新就 push 给主节点，主节点新就 pull。任意从节点的改动都会先同步到主节点，再通过其他从节点的轮询扩散到所有节点
 
-`activeAccount` 和账号删除不同步，各端独立。
+`activeAccount` 不同步，各端独立。账号删除会通过墓碑同步（v3.8.0+，按 `createdAt` 和 `deletedAt` 时间戳决策，避免删后重导入被对端再次推回）。
 
 ### 一键命令（推荐）
 
@@ -195,6 +195,13 @@ ccs status
 
 ## 版本变更
 
+- **v3.8.0**：账号删除多端同步（修复 ccs web share 被恢复 bug）
+  - **数据结构**：`~/.ccs/config.json` 新增 `deletedAccounts` 段存放墓碑；账号新增 `createdAt` 字段做版本号
+  - **删除语义**：`ccs remove` 改为把账号挪到 `deletedAccounts`、credentials 文件直接删；禁止删除当前 active 账号（需先切走）
+  - **同步**：snapshot 协议加 `deletedAccounts` 段，syncOnce 处理九态决策：双方活/双方死/单方活 vs 单方死 等组合
+  - **复活规则**：重导入同名账号生成新 `createdAt`，同步时 alive.createdAt > tomb.deletedAt 才复活，否则保留墓碑
+  - **新增 RPC**：`POST /api/share/delete` 让对端通知本端删除
+  - **同名重导入**：直接新建条目（不复用墓碑槽位），墓碑保留作为历史
 - **v3.7.13**：修复状态栏装到错误的 settings.json 字段导致不显示
   - 早期版本误把 `statusline-command.sh` 装到 `hooks.Stop`（每次 Claude 停止时执行一次，输出被丢弃），不是真正的状态栏
   - 改为写入顶层 `statusLine` 字段（Claude Code 状态栏正确接口，输出展示在终端底部）
