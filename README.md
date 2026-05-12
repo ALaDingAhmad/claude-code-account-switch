@@ -195,6 +195,10 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.11**：修复切回 OAuth 后老 claude 进程仍走 API Key
+  - `_clearApikeyEnv` / `_switchApiKey` 由 `delete env.ANTHROPIC_*` 改为 `env.ANTHROPIC_* = ''` 覆盖
+  - Claude Code 热重载 `settings.json.env` 是 merge 语义，删字段不会清掉进程内存里已设过的旧值；空字符串才能强制覆盖，免重启即可生效
+  - 顺手把遗漏的 `ANTHROPIC_API_KEY` 也纳入清理范围
 - **v3.7.10**：
   - `ccs web share` 复用本机已运行的 web 服务：检测到 `~/.ccs/web.pid` 活进程则通过 `POST /api/share/config` 在线启用 share，不再 spawn 第二个进程抢端口
   - 引入 `nodeId`（启动 web 时生成并持久化到 `~/.ccs/config.json`）作为节点身份；配置 `peerUrl` 前通过无鉴权 `GET /api/share/whoami` 探活，命中本机自身 → 拒绝；探活失败 → warn 后放行
