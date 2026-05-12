@@ -195,6 +195,10 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.13**：修复状态栏装到错误的 settings.json 字段导致不显示
+  - 早期版本误把 `statusline-command.sh` 装到 `hooks.Stop`（每次 Claude 停止时执行一次，输出被丢弃），不是真正的状态栏
+  - 改为写入顶层 `statusLine` 字段（Claude Code 状态栏正确接口，输出展示在终端底部）
+  - install 时顺手清掉旧的 `hooks.Stop` 残留，避免脚本被重复执行；uninstall 同时清两处
 - **v3.7.12**：`ccs web` 记住上次成功监听的端口
   - 监听成功后把 `actualPort` 写回 `~/.ccs/config.json` 的 `lastWebPort`
   - 下次 `ccs web` 没显式指定端口时，优先用 `lastWebPort`，否则回退到默认 7899
