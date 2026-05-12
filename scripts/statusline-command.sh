@@ -32,15 +32,36 @@ CREDS_PATH="$CLAUDE_DIR/.credentials.json"
 
 # 从 /api/oauth/usage 实时查用量（带缓存，TTL 60s）
 usage_info=$(python3 -c "
-import json, os, time, urllib.request, hashlib
+import json, os, sys, time, urllib.request, hashlib, subprocess
 
 CREDS = os.path.expanduser('~/.claude/.credentials.json')
 CACHE = os.path.expanduser('~/.claude/usage-cache.json')
 TTL = 60
 
+def read_token():
+    # 先文件（Windows/Linux/WSL），再 Keychain（macOS 唯一来源）
+    if os.path.exists(CREDS):
+        try:
+            return json.load(open(CREDS, encoding='utf-8'))['claudeAiOauth']['accessToken']
+        except Exception:
+            pass
+    if sys.platform == 'darwin':
+        try:
+            r = subprocess.run(
+                ['security', 'find-generic-password', '-s', 'Claude Code-credentials',
+                 '-a', os.environ.get('USER', ''), '-w'],
+                capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                return json.loads(r.stdout.strip())['claudeAiOauth']['accessToken']
+        except Exception:
+            pass
+    return None
+
 try:
-    creds = json.load(open(CREDS, encoding='utf-8'))
-    token = creds['claudeAiOauth']['accessToken']
+    token = read_token()
+    if not token:
+        print('', '')
+        sys.exit()
     token_hash = hashlib.md5(token.encode()).hexdigest()[:8]
 
     if os.path.exists(CACHE):
@@ -48,7 +69,7 @@ try:
         if cache.get('token_hash') == token_hash and time.time() - cache.get('ts', 0) < TTL:
             d = cache['data']
             print(d['five_hour'], d['seven_day'])
-            exit()
+            sys.exit()
 
     req = urllib.request.Request(
         'https://api.anthropic.com/api/oauth/usage',
@@ -61,7 +82,7 @@ try:
     }
     json.dump({'token_hash': token_hash, 'ts': time.time(), 'data': data}, open(CACHE, 'w'))
     print(data['five_hour'], data['seven_day'])
-except:
+except Exception:
     print('', '')
 " 2>/dev/null)
 rate5h_live=$(echo "$usage_info" | awk '{print $1}')
@@ -94,41 +115,41 @@ today_tool=$(echo "$today_stats" | awk '{print $3}')
 # === 颜色函数 ===
 pct_color() {
   local pct=$1
-  if   [ "$pct" -ge 80 ]; then echo '\e[31m'
-  elif [ "$pct" -ge 50 ]; then echo '\e[33m'
-  else echo '\e[32m'
+  if   [ "$pct" -ge 80 ]; then echo '\033[31m'
+  elif [ "$pct" -ge 50 ]; then echo '\033[33m'
+  else echo '\033[32m'
   fi
 }
 
 # === 第一行：user@host + MSYSTEM + 目录 ===
-colored_user_host=$(printf '\e[32m%s@%s\e[0m' "$(whoami)" "$(hostname 2>/dev/null | cut -d. -f1)")
-[ -n "$MSYSTEM" ] && colored_msystem=$(printf ' \e[35m%s\e[0m' "$MSYSTEM")
+colored_user_host=$(printf '\033[32m%s@%s\033[0m' "$(whoami)" "$(hostname 2>/dev/null | cut -d. -f1)")
+[ -n "$MSYSTEM" ] && colored_msystem=$(printf ' \033[35m%s\033[0m' "$MSYSTEM")
 [ -z "$cwd" ] && cwd="$(pwd)"
-colored_dir=$(printf '\e[33m%s\e[0m' "$cwd")
+colored_dir=$(printf '\033[33m%s\033[0m' "$cwd")
 line1="${colored_user_host}${colored_msystem} ${colored_dir}"
 
 # === 第二行：模型 | ctx | 费用 | 5h rate ===
 line2=""
-[ -n "$model" ] && line2=$(printf '\e[36m%s\e[0m' "$model")
+[ -n "$model" ] && line2=$(printf '\033[36m%s\033[0m' "$model")
 
 if [ -n "$used_pct" ]; then
   used_int=$(python3 -c "print(round(float('$used_pct')))" 2>/dev/null)
   if [ -n "$used_int" ]; then
     c=$(pct_color "$used_int")
-    line2="${line2} | $(printf "${c}ctx:%s%%\e[0m" "$used_int")"
+    line2="${line2} | $(printf "${c}ctx:%s%%\033[0m" "$used_int")"
   fi
 fi
 
 if [ -n "$cost" ]; then
   cost_fmt=$(python3 -c "print(f'\${float(\"$cost\"):.4f}')" 2>/dev/null)
-  [ -n "$cost_fmt" ] && line2="${line2} | $(printf '\e[37m$%s\e[0m' "$cost_fmt")"
+  [ -n "$cost_fmt" ] && line2="${line2} | $(printf '\033[38;5;130m%s\033[0m' "$cost_fmt")"
 fi
 
 if [ -n "$rate5h" ]; then
   r=$(python3 -c "print(round(float('$rate5h')))" 2>/dev/null)
   if [ -n "$r" ]; then
     c=$(pct_color "$r")
-    line2="${line2} | $(printf "${c}5h:%s%%\e[0m" "$r")"
+    line2="${line2} | $(printf "${c}5h:%s%%\033[0m" "$r")"
   fi
 fi
 
@@ -136,21 +157,40 @@ if [ -n "$rate7d" ]; then
   r=$(python3 -c "print(round(float('$rate7d')))" 2>/dev/null)
   if [ -n "$r" ]; then
     c=$(pct_color "$r")
-    line2="${line2} | $(printf "${c}7d:%s%%\e[0m" "$r")"
+    line2="${line2} | $(printf "${c}7d:%s%%\033[0m" "$r")"
   fi
 fi
 
 # === 第三行：用户信息（实时 API，带缓存）===
 user_info=$(python3 -c "
-import json, os, time, urllib.request, hashlib
+import json, os, sys, time, urllib.request, hashlib, subprocess
 
 CREDS = os.path.expanduser('~/.claude/.credentials.json')
 CACHE = os.path.expanduser('~/.claude/profile-cache.json')
 TTL = 300  # 5分钟缓存
 
+def read_token():
+    if os.path.exists(CREDS):
+        try:
+            return json.load(open(CREDS, encoding='utf-8'))['claudeAiOauth']['accessToken']
+        except Exception:
+            pass
+    if sys.platform == 'darwin':
+        try:
+            r = subprocess.run(
+                ['security', 'find-generic-password', '-s', 'Claude Code-credentials',
+                 '-a', os.environ.get('USER', ''), '-w'],
+                capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                return json.loads(r.stdout.strip())['claudeAiOauth']['accessToken']
+        except Exception:
+            pass
+    return None
+
 try:
-    creds = json.load(open(CREDS, encoding='utf-8'))
-    token = creds['claudeAiOauth']['accessToken']
+    token = read_token()
+    if not token:
+        sys.exit()
     token_hash = hashlib.md5(token.encode()).hexdigest()[:8]
 
     if os.path.exists(CACHE):
@@ -158,7 +198,7 @@ try:
         if cache.get('token_hash') == token_hash and time.time() - cache.get('ts', 0) < TTL:
             d = cache['data']
             print(d['name'], '|', d['email'], '|', d['plan'])
-            exit()
+            sys.exit()
 
     req = urllib.request.Request(
         'https://api.anthropic.com/api/oauth/profile',
@@ -174,7 +214,7 @@ try:
     }
     json.dump({'token_hash': token_hash, 'ts': time.time(), 'data': data}, open(CACHE, 'w'))
     print(data['name'], '|', data['email'], '|', data['plan'])
-except:
+except Exception:
     pass
 " 2>/dev/null)
 
@@ -183,9 +223,9 @@ user_email=$(echo "$user_info" | awk -F' \\| ' '{print $2}')
 user_plan=$(echo "$user_info" | awk -F' \\| ' '{print $3}')
 
 line3=""
-[ -n "$user_name"  ] && line3=$(printf '\e[97m%s\e[0m' "$user_name")
-[ -n "$user_email" ] && line3="${line3} $(printf '\e[90m<%s>\e[0m' "$user_email")"
-[ -n "$user_plan"  ] && line3="${line3} $(printf '\e[35m[%s]\e[0m' "$user_plan")"
+[ -n "$user_name"  ] && line3=$(printf '\033[97m%s\033[0m' "$user_name")
+[ -n "$user_email" ] && line3="${line3} $(printf '\033[90m<%s>\033[0m' "$user_email")"
+[ -n "$user_plan"  ] && line3="${line3} $(printf '\033[35m[%s]\033[0m' "$user_plan")"
 
 # === 输出 ===
 if [ -n "$line3" ]; then
