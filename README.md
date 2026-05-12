@@ -195,6 +195,14 @@ ccs status
 
 ## 版本变更
 
+- **v3.8.2**：状态栏脚本自动切账号 + 用量表
+  - 5h ≥ 99% 时自动切到非 active 且 5h<99% 的 OAuth 账号；全满则不切（等手动或自然 reset）
+  - 维护 `~/.ccs/account-usage.json` 用量表：每次状态栏 tick 更新 active 数据；评估候选时 `now < resets_at` 用表，过期/缺失则用 ccs 快照 token 调 `/api/oauth/usage` 重查；401/网络失败该候选跳过
+  - 候选评估顺序按 `config.accounts` 字典顺序，命中首个可切就停
+  - 关闭开关：`touch ~/.ccs/auto-switch.disabled`
+  - 日志：`~/.ccs/auto-switch.log`
+  - usage cache 增加 `five_hour_reset` 字段（来自 API `five_hour.resets_at`）
+  - 新增 `scripts/test-autoswitch.sh` 隔离环境测试 4 个场景
 - **v3.8.1**：状态栏脚本 mac 兼容 + 颜色/显示修复
   - mac 上 OAuth 凭证存在 Keychain（不是文件）；usage/profile 两段 Python 加 macOS Keychain fallback（`security find-generic-password -s "Claude Code-credentials" -a $USER -w`），不再只读文件
   - 颜色码 `\e[` 全部改为 `\033[`（13 处），兼容 macOS 系统自带 bash 3.2（不识别 `\e`）
