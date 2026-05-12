@@ -263,11 +263,8 @@ class AccountStore {
     const settings = this._readSettings();
     const env = settings.env || {};
     env.ANTHROPIC_AUTH_TOKEN = prev.authToken;
-    if (prev.baseUrl) {
-      env.ANTHROPIC_BASE_URL = prev.baseUrl;
-    } else {
-      delete env.ANTHROPIC_BASE_URL;
-    }
+    env.ANTHROPIC_BASE_URL = prev.baseUrl || '';
+    env.ANTHROPIC_API_KEY = '';
     atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
 
     // 清空 OAuth 凭证和账号状态，避免状态栏继续显示旧 OAuth 用户
@@ -288,8 +285,11 @@ class AccountStore {
     if (!fileExists(CLAUDE_SETTINGS_PATH)) return;
     const settings = this._readSettings();
     const env = settings.env || {};
-    delete env.ANTHROPIC_AUTH_TOKEN;
-    delete env.ANTHROPIC_BASE_URL;
+    // 置空字符串而非 delete：Claude Code 热重载 settings.json env 是 merge 语义，
+    // 删除字段时不会清掉进程内存里已经设过的旧值，必须显式 "" 覆盖
+    env.ANTHROPIC_AUTH_TOKEN = '';
+    env.ANTHROPIC_BASE_URL = '';
+    env.ANTHROPIC_API_KEY = '';
     atomicWriteJson(CLAUDE_SETTINGS_PATH, { ...settings, env });
   }
 
