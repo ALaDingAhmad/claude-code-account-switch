@@ -324,6 +324,7 @@ function startWebServer(port, openBrowser, onReady) {
       console.log(`[boot] sync skipped: ${e.message}`);
     }
     if (cfg?.enabled) share.startDaemon();
+    try { share.setLastWebPort(actualPort); } catch { /* ignore */ }
     writeWebPid({
       port: actualPort,
       bind,

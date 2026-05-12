@@ -69,6 +69,21 @@ function setShareConfig(patch) {
   return c.shareSync;
 }
 
+function getLastWebPort() {
+  const c = readConfig();
+  const p = c.lastWebPort;
+  if (typeof p === 'number' && p >= 1 && p <= 65535) return p;
+  return null;
+}
+
+function setLastWebPort(port) {
+  if (typeof port !== 'number' || port < 1 || port > 65535) return;
+  const c = readConfig();
+  if (c.lastWebPort === port) return;
+  c.lastWebPort = port;
+  saveConfig(c);
+}
+
 // ── Auth / HTTP helpers ─────────────────────────────────────────────────────
 
 function checkAuth(req, secret) {
@@ -398,6 +413,8 @@ module.exports = {
   setShareConfig,
   defaultShareConfig,
   getNodeId,
+  getLastWebPort,
+  setLastWebPort,
   refreshFromLive,
   localSnapshot,
   localAccountDetail,

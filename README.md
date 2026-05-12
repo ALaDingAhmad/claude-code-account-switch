@@ -195,6 +195,10 @@ ccs status
 
 ## 版本变更
 
+- **v3.7.12**：`ccs web` 记住上次成功监听的端口
+  - 监听成功后把 `actualPort` 写回 `~/.ccs/config.json` 的 `lastWebPort`
+  - 下次 `ccs web` 没显式指定端口时，优先用 `lastWebPort`，否则回退到默认 7899
+  - 解决"7899 长期被占 → 每次启动 +1 撞到不同端口 → URL 老变"的烦恼
 - **v3.7.11**：修复切回 OAuth 后老 claude 进程仍走 API Key
   - `_clearApikeyEnv` / `_switchApiKey` 由 `delete env.ANTHROPIC_*` 改为 `env.ANTHROPIC_* = ''` 覆盖
   - Claude Code 热重载 `settings.json.env` 是 merge 语义，删字段不会清掉进程内存里已设过的旧值；空字符串才能强制覆盖，免重启即可生效
