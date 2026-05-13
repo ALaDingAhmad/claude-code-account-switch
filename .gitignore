@@ -8,3 +8,8 @@ claude-code-account-switcher-spec-final.md
 tmp-*/
 tmp_*.json
 dist/
+
+# 测试/调试脚本不进仓库
+test-*
+*_test.*
+tests/

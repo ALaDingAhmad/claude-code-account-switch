@@ -1,0 +1,26 @@
+# 一旦 .npmignore 存在，npm 会完全忽略 .gitignore，所以这里要把不该发布的全列齐
+
+# 开发产物 / 本地数据
+node_modules/
+*.log
+.ccs/
+.claude/
+generated-images/
+*.tmp
+tmp-*/
+tmp_*.json
+dist/
+
+# 测试/调试脚本不进 npm 包
+test-*
+*_test.*
+tests/
+
+# 仓库元数据
+.git/
+.github/
+.gitignore
+.npmignore
+
+# 开发文档/规划稿
+claude-code-account-switcher-spec-final.md

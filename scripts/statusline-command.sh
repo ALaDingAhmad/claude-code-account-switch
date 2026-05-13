@@ -252,8 +252,10 @@ fi
 #   - 每次状态栏 tick 都更新当前 active 的用量
 #   - 仅当 active 5h >= 99 时进入切换决策：
 #       1. 评估每个候选 OAuth：表里数据有效（now < resets_at）就用；过期或缺失就调 API 刷新
-#       2. 任意候选 5h < 99 → 切到它（按 config.accounts 顺序首个）
-#       3. 全满 → 不切（B 方案），用户自己等或手动处理
+#       2. 优先切到"明确 5h < 99"的候选（按 config.accounts 顺序首个）
+#       3. 都查不到用量时（快照 token 过期/网络失败），乐观切到首个 OAuth 候选；
+#          ccs 主程序切换时会走完整 refresh 流程，下一 tick 自然恢复正常查询
+#       4. 确认全满才不切
 #   - 关闭整个功能: touch ~/.ccs/auto-switch.disabled
 if [ ! -f "$HOME/.ccs/auto-switch.disabled" ] && [ -n "$rate5h" ]; then
   (python3 - "$rate5h" "$rate5h_reset" <<'PYEOF' &) 2>/dev/null
@@ -364,21 +366,25 @@ if not candidates:
     log(f'5h={cur_5h_val}%, no OAuth candidates to switch to')
     sys.exit()
 
-target = None
+# 给每个候选评估出 (status, value):
+#   status='known': value=用量百分比；'unknown': 查不到（无 token 或 API 失败）
+evaluated = []  # [(name, status, value)] 保持 config.accounts 顺序
 for name, _acct in candidates:
     info = table.get(name)
     reset_dt = parse_iso(info.get('resets_at')) if info else None
     fresh = info and reset_dt and reset_dt > now
     if not fresh:
-        # 表里数据缺失或 resets_at 已过 → 调 API 重查
         tok = read_account_token(name)
         if not tok:
-            log(f'skip {name}: no token snapshot')
+            log(f'{name}: no token snapshot, mark unknown')
+            evaluated.append((name, 'unknown', None))
             continue
         q = query_usage_for_token(tok)
         if q is None:
-            # 401/网络等失败：跳过此候选，不更新表（保留旧值）
-            log(f'skip {name}: usage query failed')
+            # 401/网络等失败：快照里的 access_token 可能已被服务端 rotate，
+            # 标记为 unknown，留作乐观切兜底（ccs 切换时会走完整 refresh）
+            log(f'{name}: usage query failed, mark unknown')
+            evaluated.append((name, 'unknown', None))
             continue
         five_hour, resets_at = q
         table[name] = {
@@ -388,17 +394,33 @@ for name, _acct in candidates:
         }
         info = table[name]
         save_usage(table)
+    evaluated.append((name, 'known', info['five_hour']))
 
-    if info['five_hour'] < THRESHOLD:
+# 第一轮：明确 5h < 99 的候选优先（按 config.accounts 顺序首个）
+target = None
+optimistic = False
+for name, status, val in evaluated:
+    if status == 'known' and val < THRESHOLD:
         target = name
-        break  # 按 config.accounts 顺序的第一个可切
+        break
+
+# 第二轮：没有明确可切的，但有 unknown 候选 → 乐观切首个
+if not target:
+    for name, status, _val in evaluated:
+        if status == 'unknown':
+            target = name
+            optimistic = True
+            break
 
 if not target:
     log(f'5h={cur_5h_val}%, all candidates also full (no switch)')
     sys.exit()
 
 # === 步骤 4: 真切换 ===
-log(f'5h={cur_5h_val}% (resets {cur_reset}), switching from {cur} to {target} (5h={table[target]["five_hour"]}%)')
+if optimistic:
+    log(f'5h={cur_5h_val}% (resets {cur_reset}), optimistic switch from {cur} to {target} (usage unknown)')
+else:
+    log(f'5h={cur_5h_val}% (resets {cur_reset}), switching from {cur} to {target} (5h={table[target]["five_hour"]}%)')
 try:
     r = subprocess.run(['ccs', target], capture_output=True, text=True, timeout=15)
     if r.returncode == 0:

@@ -1,6 +1,6 @@
 {
   "name": "claude-code-account-switch",
-  "version": "3.8.3",
+  "version": "3.8.4",
   "description": "Claude Code 多账号切换工具，支持 Windows/macOS/Linux/WSL，OAuth + API Key 双模式，多端 web 共享同步",
   "bin": {
     "ccs": "bin/ccs.js"
@@ -35,6 +35,8 @@
   "files": [
     "bin/",
     "src/",
-    "scripts/"
+    "scripts/postinstall.js",
+    "scripts/refresh-token.js",
+    "scripts/statusline-command.sh"
   ]
 }
