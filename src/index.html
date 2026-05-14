@@ -335,6 +335,32 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
     </div>
   </div>
 
+  <!-- 账号用量监控 -->
+  <div class="section-label" style="margin-top:32px">账号用量监控</div>
+  <div class="import-card" id="monitor-section">
+    <p style="margin-bottom:14px;color:var(--text-dim);font-size:13px;line-height:1.6">
+      <b>不依赖状态栏，独立守护进程定期查询 5h 用量，撞墙前自动切换账号。</b><br>
+      active 5h ≥ 90% 时自动启动守护，90–95% 每 60s 查一次，96–99% 每 10s 查一次，≥99% 或遇到 429 立即切换。<br>
+      切换后第三行状态栏显示红色提示「已切到 X，重启 Claude Code 生效」。<br>
+      关闭开关将停止守护进程；下次 5h 再升到 90% 时若开关开启会自动重新启动。
+    </p>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px">
+        <input type="checkbox" id="monitor-enabled" onchange="onMonitorToggle()" />
+        <span>启用用量监控守护</span>
+      </label>
+      <span id="monitor-badge" style="font-size:12px"></span>
+    </div>
+    <div id="monitor-detail" style="display:none;flex-direction:column;gap:8px">
+      <div style="display:flex;gap:24px;font-size:12px;color:var(--text-dim)">
+        <span>PID：<b id="monitor-pid">—</b></span>
+        <span>运行时长：<b id="monitor-uptime">—</b></span>
+      </div>
+      <div style="font-size:12px;color:var(--text-dim);margin-top:4px">最近日志：</div>
+      <pre id="monitor-logs" style="font-size:11px;line-height:1.5;background:var(--bg);padding:10px;border-radius:6px;overflow-x:auto;max-height:220px;overflow-y:auto;margin:0;color:var(--text-dim);white-space:pre-wrap;word-break:break-all"></pre>
+    </div>
+  </div>
+
   <!-- Share Sync 设置 -->
   <div class="section-label" style="margin-top:32px">多端共享同步</div>
   <div class="import-card" id="share-section">
@@ -735,6 +761,74 @@ async function doStatuslineUninstall() {
   }
 }
 
+// ── 账号用量监控 ──────────────────────────────────────────────────────────────
+
+let _monitorUserToggling = false;
+
+async function loadMonitorStatus() {
+  try {
+    const r = await fetch('/api/monitor/status');
+    const d = await r.json();
+    if (!d.ok) return;
+    if (!_monitorUserToggling) renderMonitorStatus(d);
+  } catch { /* ignore */ }
+}
+
+function _formatUptime(sec) {
+  if (sec == null) return '—';
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+  return Math.floor(sec / 3600) + 'h ' + Math.floor((sec % 3600) / 60) + 'm';
+}
+
+function renderMonitorStatus(s) {
+  const cb      = document.getElementById('monitor-enabled');
+  const badge   = document.getElementById('monitor-badge');
+  const detail  = document.getElementById('monitor-detail');
+  const pidEl   = document.getElementById('monitor-pid');
+  const upEl    = document.getElementById('monitor-uptime');
+  const logsEl  = document.getElementById('monitor-logs');
+
+  cb.checked = !!s.enabled;
+
+  if (s.running) {
+    badge.innerHTML = '<span style="color:var(--green);font-weight:600">● 运行中</span>';
+    detail.style.display = 'flex';
+    pidEl.textContent  = s.pid ?? '—';
+    upEl.textContent   = _formatUptime(s.uptimeSeconds);
+    logsEl.textContent = (s.recentLogs || []).join('\n') || '（暂无日志）';
+    logsEl.scrollTop   = logsEl.scrollHeight;
+  } else if (s.enabled) {
+    badge.innerHTML = '<span style="color:var(--text-dim)">○ 未运行（5h < 90% 时守护不启动）</span>';
+    detail.style.display = 'flex';
+    pidEl.textContent  = '—';
+    upEl.textContent   = '—';
+    logsEl.textContent = (s.recentLogs || []).join('\n') || '（暂无日志）';
+    logsEl.scrollTop   = logsEl.scrollHeight;
+  } else {
+    badge.innerHTML = '<span style="color:var(--text-dim)">已禁用</span>';
+    detail.style.display = 'none';
+  }
+}
+
+async function onMonitorToggle() {
+  const cb = document.getElementById('monitor-enabled');
+  _monitorUserToggling = true;
+  try {
+    const api = cb.checked ? '/api/monitor/enable' : '/api/monitor/disable';
+    const r = await fetch(api, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    renderMonitorStatus(d);
+    showToast(cb.checked ? '用量监控已启用' : '用量监控已禁用', 'ok');
+  } catch (e) {
+    cb.checked = !cb.checked;  // 回滚 UI
+    showToast(e.message || '操作失败', 'err');
+  } finally {
+    _monitorUserToggling = false;
+  }
+}
+
 async function loadVersion() {
   try {
     const r = await fetch('/api/version');
@@ -918,8 +1012,10 @@ load();
 loadVersion();
 loadShareConfig();
 loadStatuslineStatus();
+loadMonitorStatus();
 setInterval(() => load(), 30000);
 setInterval(() => loadShareStatus(), 30000);
+setInterval(() => loadMonitorStatus(), 10000);
 </script>
 </body>
 </html>
