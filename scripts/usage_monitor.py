@@ -45,6 +45,22 @@ def _read_pid():
 
 
 def _pid_alive(pid):
+    # Windows 上 os.kill(pid, 0) 不抛 OSError，用 psutil 或 /proc 都不可靠；
+    # 改用 OpenProcess + GetExitCodeProcess（只在 Windows 生效）
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            code = ctypes.c_ulong(0)
+            ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return code.value == 259  # STILL_ACTIVE
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
