@@ -281,186 +281,23 @@ fi
 #       4. 确认全满才不切
 #   - 关闭整个功能: touch ~/.ccs/auto-switch.disabled
 if [ ! -f "$HOME/.ccs/auto-switch.disabled" ] && [ -n "$rate5h" ]; then
-  (python3 - "$rate5h" "$rate5h_reset" <<'PYEOF' &) 2>/dev/null
-import json, os, sys, shutil, subprocess, urllib.request, urllib.error
-from datetime import datetime, timezone
+  # 切换逻辑抽到 auto_switch_core.py（与状态栏脚本同目录），便于守护进程复用
+  # 后台异步跑，不阻塞状态栏渲染；错误吞掉避免影响状态栏
+  _CORE="$(dirname "$0")/auto_switch_core.py"
+  if [ -f "$_CORE" ]; then
+    (python3 "$_CORE" "$rate5h" "$rate5h_reset" &) 2>/dev/null
+  fi
+fi
 
-cur_5h_str  = sys.argv[1] if len(sys.argv) > 1 else ''
-cur_reset   = sys.argv[2] if len(sys.argv) > 2 else ''
-
-CFG   = os.path.expanduser('~/.ccs/config.json')
-USAGE = os.path.expanduser('~/.ccs/account-usage.json')
-LOG   = os.path.expanduser('~/.ccs/auto-switch.log')
-ACC_DIR = os.path.expanduser('~/.ccs/accounts')
-
-THRESHOLD = 99  # 5h 达到 99% 才触发切换
-
-def log(msg):
-    try:
-        os.makedirs(os.path.dirname(LOG), exist_ok=True)
-        with open(LOG, 'a', encoding='utf-8') as f:
-            f.write(f"[{datetime.now().strftime('%F %T')}] {msg}\n")
-    except Exception:
-        pass
-
-def parse_iso(s):
-    if not s: return None
-    try:
-        return datetime.fromisoformat(s.replace('Z', '+00:00'))
-    except Exception:
-        return None
-
-def save_usage(table):
-    try:
-        os.makedirs(os.path.dirname(USAGE), exist_ok=True)
-        json.dump(table, open(USAGE, 'w', encoding='utf-8'), indent=2)
-    except Exception as e:
-        log(f'write usage table failed: {e}')
-
-def load_usage():
-    if not os.path.exists(USAGE): return {}
-    try:
-        return json.load(open(USAGE, encoding='utf-8')) or {}
-    except Exception:
-        return {}
-
-def read_account_token(name):
-    """从 ccs 快照读账号的 OAuth access token (mac 也是这个文件，不是 Keychain)"""
-    p = os.path.join(ACC_DIR, f'{name}.credentials.json')
-    if not os.path.exists(p): return None
-    try:
-        return json.load(open(p, encoding='utf-8'))['claudeAiOauth']['accessToken']
-    except Exception:
-        return None
-
-def query_usage_for_token(token):
-    """调 /api/oauth/usage 查一个 token 的当前用量。
-    返回 (five_hour:float, resets_at:str) 或 None"""
-    try:
-        req = urllib.request.Request(
-            'https://api.anthropic.com/api/oauth/usage',
-            headers={'Authorization': f'Bearer {token}',
-                     'anthropic-beta': 'oauth-2025-04-20',
-                     'Accept': 'application/json'})
-        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-        fh = resp.get('five_hour') or {}
-        return float(fh.get('utilization') or 0.0), (fh.get('resets_at') or '')
-    except urllib.error.HTTPError as e:
-        log(f'API HTTP {e.code} on usage query')
-        return None
-    except Exception as e:
-        log(f'API error on usage query: {e}')
-        return None
-
-# === 读 config ===
-try:
-    cfg = json.load(open(CFG, encoding='utf-8'))
-except Exception as e:
-    log(f'read config failed: {e}')
-    sys.exit()
-
-cur = cfg.get('activeAccount')
-accounts = cfg.get('accounts') or {}
-table = load_usage()
-now = datetime.now(timezone.utc)
-now_iso = now.isoformat()
-
-# === 步骤 1: 更新 active 账号用量（每次 tick 必做）===
-try:
-    cur_5h_val = float(cur_5h_str) if cur_5h_str else None
-except Exception:
-    cur_5h_val = None
-if cur and cur_5h_val is not None:
-    table[cur] = {
-        'five_hour': cur_5h_val,
-        'resets_at': cur_reset,
-        'checked_at': now_iso,
-    }
-    save_usage(table)
-
-# === 步骤 2: 触发判定 ===
-if cur_5h_val is None or cur_5h_val < THRESHOLD:
-    sys.exit()  # 没满，不切
-
-# === 步骤 3: 评估候选 ===
-candidates = [(n, a) for n, a in accounts.items()
-              if n != cur and (a.get('type') or 'oauth') == 'oauth']
-if not candidates:
-    log(f'5h={cur_5h_val}%, no OAuth candidates to switch to')
-    sys.exit()
-
-# 给每个候选评估出 (status, value):
-#   status='known': value=用量百分比；'unknown': 查不到（无 token 或 API 失败）
-evaluated = []  # [(name, status, value)] 保持 config.accounts 顺序
-for name, _acct in candidates:
-    info = table.get(name)
-    reset_dt = parse_iso(info.get('resets_at')) if info else None
-    fresh = info and reset_dt and reset_dt > now
-    if not fresh:
-        tok = read_account_token(name)
-        if not tok:
-            log(f'{name}: no token snapshot, mark unknown')
-            evaluated.append((name, 'unknown', None))
-            continue
-        q = query_usage_for_token(tok)
-        if q is None:
-            # 401/网络等失败：快照里的 access_token 可能已被服务端 rotate，
-            # 标记为 unknown，留作乐观切兜底（ccs 切换时会走完整 refresh）
-            log(f'{name}: usage query failed, mark unknown')
-            evaluated.append((name, 'unknown', None))
-            continue
-        five_hour, resets_at = q
-        table[name] = {
-            'five_hour': five_hour,
-            'resets_at': resets_at,
-            'checked_at': now_iso,
-        }
-        info = table[name]
-        save_usage(table)
-    evaluated.append((name, 'known', info['five_hour']))
-
-# 第一轮：明确 5h < 99 的候选优先（按 config.accounts 顺序首个）
-target = None
-optimistic = False
-for name, status, val in evaluated:
-    if status == 'known' and val < THRESHOLD:
-        target = name
-        break
-
-# 第二轮：没有明确可切的，但有 unknown 候选 → 乐观切首个
-if not target:
-    for name, status, _val in evaluated:
-        if status == 'unknown':
-            target = name
-            optimistic = True
-            break
-
-if not target:
-    log(f'5h={cur_5h_val}%, all candidates also full (no switch)')
-    sys.exit()
-
-# === 步骤 4: 真切换 ===
-if optimistic:
-    log(f'5h={cur_5h_val}% (resets {cur_reset}), optimistic switch from {cur} to {target} (usage unknown)')
-else:
-    log(f'5h={cur_5h_val}% (resets {cur_reset}), switching from {cur} to {target} (5h={table[target]["five_hour"]}%)')
-try:
-    # Windows 下 subprocess 默认不解析 PATHEXT，找不到 ccs.CMD/ccs.cmd；
-    # 用 shutil.which 显式拿到带扩展名的全路径，三个平台通用
-    ccs_bin = shutil.which('ccs') or 'ccs'
-    r = subprocess.run([ccs_bin, target], capture_output=True, text=True, timeout=15)
-    if r.returncode == 0:
-        log(f'switched to {target} OK')
-        # 写切换标记，供状态栏第三行展示"重启 Claude Code 生效"提示
-        try:
-            import time as _t
-            json.dump({'from': cur, 'to': target, 'ts': _t.time()},
-                      open(os.path.expanduser('~/.ccs/last-switch.json'), 'w', encoding='utf-8'))
-        except Exception:
-            pass
-    else:
-        log(f'switch failed rc={r.returncode}: {(r.stderr or r.stdout or "").strip()[:200]}')
-except Exception as e:
-    log(f'switch exception: {e} (ccs_bin={shutil.which("ccs")!r})')
-PYEOF
+# 用量监控守护进程：active 5h ≥ 90% 时拉起，自带 60s/10s 调度直到撞墙或下降
+# 单例：usage_monitor.py 自己用 pid 文件去重，重复 spawn 也无害
+# 关闭整个守护: touch ~/.ccs/usage-monitor.disabled
+if [ ! -f "$HOME/.ccs/usage-monitor.disabled" ] && [ -n "$rate5h" ]; then
+  _MON="$(dirname "$0")/usage_monitor.py"
+  if [ -f "$_MON" ]; then
+    _5h_int=$(python3 -c "print(int(float('$rate5h')))" 2>/dev/null)
+    if [ -n "$_5h_int" ] && [ "$_5h_int" -ge 90 ]; then
+      (python3 "$_MON" &) 2>/dev/null
+    fi
+  fi
 fi
