@@ -238,6 +238,29 @@ line3=""
 [ -n "$user_email" ] && line3="${line3} $(printf '\033[90m<%s>\033[0m' "$user_email")"
 [ -n "$user_plan"  ] && line3="${line3} $(printf '\033[35m[%s]\033[0m' "$user_plan")"
 
+# 最近 30 分钟内有过自动切换 → 追加红色提示让用户重启 Claude Code
+# Claude Code 进程启动时把 token 加载进内存，自动切换只改文件、不改内存中的 token；
+# 必须重启 Claude Code 才能让新 token 生效
+switch_hint=$(python3 -c "
+import json, os, time
+from datetime import datetime
+p = os.path.expanduser('~/.ccs/last-switch.json')
+if not os.path.exists(p): exit()
+try:
+    d = json.load(open(p, encoding='utf-8'))
+    ts = float(d.get('ts', 0))
+    if time.time() - ts > 1800: exit()  # 30 分钟外不提示
+    to = d.get('to', '?')
+    when = datetime.fromtimestamp(ts).strftime('%H:%M')
+    print(f'已切到 {to}（{when}），重启 Claude Code 生效')
+except Exception:
+    pass
+" 2>/dev/null)
+if [ -n "$switch_hint" ]; then
+  hint_colored=$(printf '\033[1;31m⚠ %s\033[0m' "$switch_hint")
+  line3="${line3:+${line3} | }${hint_colored}"
+fi
+
 # === 输出 ===
 if [ -n "$line3" ]; then
   printf '%s\n%s\n%s' "$line1" "$line2" "$line3"
@@ -259,7 +282,7 @@ fi
 #   - 关闭整个功能: touch ~/.ccs/auto-switch.disabled
 if [ ! -f "$HOME/.ccs/auto-switch.disabled" ] && [ -n "$rate5h" ]; then
   (python3 - "$rate5h" "$rate5h_reset" <<'PYEOF' &) 2>/dev/null
-import json, os, sys, subprocess, urllib.request, urllib.error
+import json, os, sys, shutil, subprocess, urllib.request, urllib.error
 from datetime import datetime, timezone
 
 cur_5h_str  = sys.argv[1] if len(sys.argv) > 1 else ''
@@ -422,12 +445,22 @@ if optimistic:
 else:
     log(f'5h={cur_5h_val}% (resets {cur_reset}), switching from {cur} to {target} (5h={table[target]["five_hour"]}%)')
 try:
-    r = subprocess.run(['ccs', target], capture_output=True, text=True, timeout=15)
+    # Windows 下 subprocess 默认不解析 PATHEXT，找不到 ccs.CMD/ccs.cmd；
+    # 用 shutil.which 显式拿到带扩展名的全路径，三个平台通用
+    ccs_bin = shutil.which('ccs') or 'ccs'
+    r = subprocess.run([ccs_bin, target], capture_output=True, text=True, timeout=15)
     if r.returncode == 0:
         log(f'switched to {target} OK')
+        # 写切换标记，供状态栏第三行展示"重启 Claude Code 生效"提示
+        try:
+            import time as _t
+            json.dump({'from': cur, 'to': target, 'ts': _t.time()},
+                      open(os.path.expanduser('~/.ccs/last-switch.json'), 'w', encoding='utf-8'))
+        except Exception:
+            pass
     else:
         log(f'switch failed rc={r.returncode}: {(r.stderr or r.stdout or "").strip()[:200]}')
 except Exception as e:
-    log(f'switch exception: {e}')
+    log(f'switch exception: {e} (ccs_bin={shutil.which("ccs")!r})')
 PYEOF
 fi
