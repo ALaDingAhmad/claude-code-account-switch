@@ -24,7 +24,7 @@ SWITCH_THRESHOLD   = 99   # 高于此值触发切换
 INTERVAL_SLOW      = 60
 INTERVAL_FAST      = 10
 MAX_ERRORS         = 5
-MAX_RUNTIME        = 7200  # 2 小时
+MAX_RUNTIME        = 86400 * 7  # 7 天（实质无限，disabled 文件才是真正的停止信号）
 
 
 def log(msg):
@@ -167,22 +167,21 @@ def main():
             _do_switch(None, '', force=True)
             break
 
-        # 其他查询失败
+        # 其他查询失败：指数退避，最长 5 分钟，不退出（网络抖动应自愈）
         if five_hour is None:
             errors += 1
-            log(f'monitor: query failed ({errors}/{MAX_ERRORS})')
-            if errors >= MAX_ERRORS:
-                log('monitor exit: too many errors')
-                break
-            time.sleep(INTERVAL_SLOW)
+            backoff = min(INTERVAL_SLOW * (2 ** (errors - 1)), 300)
+            log(f'monitor: query failed ({errors}), retry in {backoff}s')
+            time.sleep(backoff)
             continue
 
         errors = 0  # 查到数据就重置计数
 
-        # 用量降到 90% 以下（切换成功 / 自然 reset） → 退出
+        # 用量低于 90%：从状态栏 spawn 时会预判，但从 Web UI spawn 时无条件启动，
+        # 所以这里不退出，安静等待 60s 继续轮询（disabled / 超时 才是退出条件）
         if five_hour < MONITOR_THRESHOLD:
-            log(f'monitor exit: 5h={five_hour}% < {MONITOR_THRESHOLD}%, no longer needed')
-            break
+            time.sleep(INTERVAL_SLOW)
+            continue
 
         # 触发切换
         if five_hour >= SWITCH_THRESHOLD:
