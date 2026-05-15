@@ -14,9 +14,6 @@ const SOURCE_PATH = path.join(__dirname, '..', 'scripts', SCRIPT_NAME);
 const TARGET_PATH = path.join(CLAUDE_DIR, SCRIPT_NAME);
 const STATUSLINE_COMMAND = `bash ~/.claude/${SCRIPT_NAME}`;
 
-// 与状态栏脚本一同安装的 Python 辅助模块
-const PY_HELPERS = ['auto_switch_core.py', 'usage_monitor.py'];
-
 function readSettings() {
   if (!fileExists(CLAUDE_SETTINGS_PATH)) return {};
   try { return readJson(CLAUDE_SETTINGS_PATH); } catch { return {}; }
@@ -79,16 +76,6 @@ function install() {
   fs.writeFileSync(TARGET_PATH, patched);
   try { fs.chmodSync(TARGET_PATH, 0o755); } catch { /* non-posix */ }
 
-  // 复制 Python 辅助模块（切换核心 + 守护进程）
-  for (const name of PY_HELPERS) {
-    const src = path.join(__dirname, '..', 'scripts', name);
-    const dst = path.join(CLAUDE_DIR, name);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, dst);
-      try { fs.chmodSync(dst, 0o755); } catch { /* non-posix */ }
-    }
-  }
-
   const settings = readSettings();
   // 早期版本误装到 hooks.Stop，顺手清掉避免脚本被跑两次
   removeLegacyStopHook(settings);
@@ -100,14 +87,8 @@ function install() {
 }
 
 function uninstall() {
-  // 删脚本及辅助模块
+  // 只删状态栏脚本；auto_switch_core.py / usage_monitor.py 由 monitor 模块独立管理
   try { if (fileExists(TARGET_PATH)) fs.unlinkSync(TARGET_PATH); } catch { /* ignore */ }
-  for (const name of PY_HELPERS) {
-    try {
-      const p = path.join(CLAUDE_DIR, name);
-      if (fileExists(p)) fs.unlinkSync(p);
-    } catch { /* ignore */ }
-  }
 
   const settings = readSettings();
   let changed = false;

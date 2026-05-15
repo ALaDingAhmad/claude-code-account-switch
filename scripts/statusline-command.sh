@@ -91,7 +91,6 @@ except Exception:
 " 2>/dev/null)
 rate5h_live=$(echo "$usage_info" | awk '{print $1}')
 rate7d_live=$(echo "$usage_info" | awk '{print $2}')
-rate5h_reset=$(echo "$usage_info" | awk '{print $3}')
 [ -n "$rate5h_live" ] && rate5h="$rate5h_live"
 [ -n "$rate7d_live" ] && rate7d="$rate7d_live"
 
@@ -267,37 +266,5 @@ if [ -n "$line3" ]; then
 else
   printf '%s\n%s' "$line1" "$line2"
 fi
-
-# === 用量表维护 + 自动切换 ===
-# 用量表: ~/.ccs/account-usage.json
-#   每个账号: { five_hour, resets_at, checked_at }
-# 行为:
-#   - 每次状态栏 tick 都更新当前 active 的用量
-#   - 仅当 active 5h >= 99 时进入切换决策：
-#       1. 评估每个候选 OAuth：表里数据有效（now < resets_at）就用；过期或缺失就调 API 刷新
-#       2. 优先切到"明确 5h < 99"的候选（按 config.accounts 顺序首个）
-#       3. 都查不到用量时（快照 token 过期/网络失败），乐观切到首个 OAuth 候选；
-#          ccs 主程序切换时会走完整 refresh 流程，下一 tick 自然恢复正常查询
-#       4. 确认全满才不切
-#   - 关闭整个功能: touch ~/.ccs/auto-switch.disabled
-if [ ! -f "$HOME/.ccs/auto-switch.disabled" ] && [ -n "$rate5h" ]; then
-  # 切换逻辑抽到 auto_switch_core.py（与状态栏脚本同目录），便于守护进程复用
-  # 后台异步跑，不阻塞状态栏渲染；错误吞掉避免影响状态栏
-  _CORE="$(dirname "$0")/auto_switch_core.py"
-  if [ -f "$_CORE" ]; then
-    (python3 "$_CORE" "$rate5h" "$rate5h_reset" &) 2>/dev/null
-  fi
-fi
-
-# 用量监控守护进程：active 5h ≥ 90% 时拉起，自带 60s/10s 调度直到撞墙或下降
-# 单例：usage_monitor.py 自己用 pid 文件去重，重复 spawn 也无害
-# 关闭整个守护: touch ~/.ccs/usage-monitor.disabled
-if [ ! -f "$HOME/.ccs/usage-monitor.disabled" ] && [ -n "$rate5h" ]; then
-  _MON="$(dirname "$0")/usage_monitor.py"
-  if [ -f "$_MON" ]; then
-    _5h_int=$(python3 -c "print(int(float('$rate5h')))" 2>/dev/null)
-    if [ -n "$_5h_int" ] && [ "$_5h_int" -ge 90 ]; then
-      (python3 "$_MON" &) 2>/dev/null
-    fi
-  fi
-fi
+# 注：v3.9.0 起状态栏不再做自动切换 / spawn 守护，仅展示用量
+# 自动切换守护进程改为通过 Web UI「账号用量监控」开关启用
