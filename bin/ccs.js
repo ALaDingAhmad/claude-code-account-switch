@@ -18,6 +18,8 @@ const {
 } = require(path.join(__dirname, '..', 'src', 'utils'));
 const share = require(path.join(__dirname, '..', 'src', 'share'));
 const { startWebServer } = require(path.join(__dirname, '..', 'src', 'web'));
+const monitor = require(path.join(__dirname, '..', 'src', 'monitor'));
+const autostart = require(path.join(__dirname, '..', 'src', 'autostart'));
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -27,6 +29,7 @@ const WEB_DEFAULT_PORT = 7899;
 const COMMANDS = new Set([
   'import', 'switch', 'status', 'accounts',
   'clear-current', 'logout', 'remove', 'doctor', 'web', 'sync', 'share',
+  'monitor', 'autostart',
 ]);
 
 async function main() {
@@ -67,7 +70,87 @@ async function dispatch(cmd, rest) {
     case 'web':          return cmdWeb(rest);
     case 'sync':         return cmdSync();
     case 'share':        return cmdShare(rest);
+    case 'monitor':      return cmdMonitor(rest);
+    case 'autostart':    return cmdAutostart(rest);
   }
+}
+
+function cmdMonitor(rest) {
+  const sub = rest[0] || 'status';
+  if (sub === 'status') {
+    const s = monitor.getStatus();
+    console.log('Usage monitor:');
+    console.log(`  enabled : ${s.enabled}`);
+    console.log(`  running : ${s.running}`);
+    if (s.running) {
+      console.log(`  pid     : ${s.pid}`);
+      console.log(`  uptime  : ${s.uptimeSeconds}s`);
+    }
+    if (s.recentLogs && s.recentLogs.length) {
+      console.log('  recent log lines:');
+      for (const l of s.recentLogs.slice(-5)) console.log(`    ${l}`);
+    }
+    return;
+  }
+  if (sub === 'enable') {
+    const s = monitor.enable();
+    console.log(`monitor enabled. running=${s.running}${s.pid ? `, pid=${s.pid}` : ''}`);
+    if (autostart.isSupported()) {
+      const a = autostart.status();
+      console.log(`autostart: ${a.installed ? '已注册任务计划' : '未注册（enable 内部调用失败，可手动 ccs autostart install）'}`);
+    }
+    return;
+  }
+  if (sub === 'disable') {
+    const s = monitor.disable();
+    console.log(`monitor disabled. running=${s.running}`);
+    if (autostart.isSupported()) {
+      const a = autostart.status();
+      console.log(`autostart: ${a.installed ? '仍存在（移除失败）' : '已移除'}`);
+    }
+    return;
+  }
+  if (sub === 'revive') {
+    const r = monitor.revive();
+    if (r.revived) console.log('monitor revived (was enabled but not running)');
+    else console.log(`monitor not revived: ${r.reason}${r.pid ? ` (pid=${r.pid})` : ''}`);
+    return;
+  }
+  throw new Error('Usage: ccs monitor <status|enable|disable|revive>');
+}
+
+function cmdAutostart(rest) {
+  const sub = rest[0] || 'status';
+  if (!autostart.isSupported()) {
+    console.log('autostart 仅在 Windows 下支持（macOS/Linux 请用 launchd / systemd --user）');
+    return;
+  }
+  if (sub === 'status') {
+    const s = autostart.status();
+    console.log(`autostart task: ${autostart.TASK_NAME}`);
+    console.log(`  installed : ${s.installed}`);
+    if (s.installed) {
+      console.log(`  task to run: ${s.taskToRun || '?'}`);
+      console.log(`  status     : ${s.status || '?'}`);
+      console.log(`  last run   : ${s.lastRun || '?'}`);
+      console.log(`  next run   : ${s.nextRun || '?'}`);
+    }
+    return;
+  }
+  if (sub === 'install') {
+    const r = autostart.install();
+    if (r.ok) console.log(`autostart 已注册：登录时自动执行 ccs monitor revive（任务名 ${autostart.TASK_NAME}）`);
+    else console.log(`autostart 注册失败：${r.error || '未知错误'}`);
+    return;
+  }
+  if (sub === 'remove') {
+    const r = autostart.remove();
+    if (r.removed) console.log(`autostart 已移除（任务名 ${autostart.TASK_NAME}）`);
+    else if (r.alreadyAbsent) console.log(`autostart 本来就没注册`);
+    else console.log(`autostart 移除失败：${r.error || '未知错误'}`);
+    return;
+  }
+  throw new Error('Usage: ccs autostart <status|install|remove>');
 }
 
 function cmdImport(rest) {
@@ -544,6 +627,17 @@ Web 服务：
   ccs share disable                  禁用 share-sync 并清除 secret
   ccs share secret                   输出明文 secret（用于复制到对端）
   ccs share sync                     立即触发一轮同步
+
+用量监控守护：
+  ccs monitor status                 查看守护状态、pid、运行时长、最近日志
+  ccs monitor enable                 启用守护并注册开机自启（任务计划程序）
+  ccs monitor disable                停止守护并移除自启
+  ccs monitor revive                 守护掉了就拉起来（任务计划程序登录时调用此命令）
+
+开机自启（仅 Windows）：
+  ccs autostart status               查看任务计划程序中 CCS-UsageMonitor 任务状态
+  ccs autostart install              注册"登录时执行 ccs monitor revive"任务（无需管理员）
+  ccs autostart remove               移除该任务
 `);
 }
 

@@ -799,7 +799,9 @@ function renderMonitorStatus(s) {
     logsEl.textContent = (s.recentLogs || []).join('\n') || '（暂无日志）';
     logsEl.scrollTop   = logsEl.scrollHeight;
   } else if (s.enabled) {
-    badge.innerHTML = '<span style="color:var(--text-dim)">○ 未运行（5h < 90% 时守护不启动）</span>';
+    badge.innerHTML = '<span style="color:#ef4444;font-weight:600">⚠ 已启用但守护未运行</span>'
+                    + '<span style="color:var(--text-dim);font-size:12px;margin-left:8px">'
+                    + '（自动重启失败，请查看日志或关闭再打开开关）</span>';
     detail.style.display = 'flex';
     pidEl.textContent  = '—';
     upEl.textContent   = '—';

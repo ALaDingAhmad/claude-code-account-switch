@@ -99,11 +99,27 @@ function getStatus() {
   return { enabled, running, pid: running ? pid : null, uptimeSeconds, recentLogs };
 }
 
+function _tryAutostart(action) {
+  // autostart 失败不阻塞主流程，但记录到 auto-switch.log 便于排查
+  try {
+    const autostart = require('./autostart');
+    if (!autostart.isSupported()) return null;
+    const r = action === 'install' ? autostart.install() : autostart.remove();
+    try {
+      const line = `[${new Date().toISOString()}] [autostart] ${action}: ${JSON.stringify(r)}\n`;
+      ensureDir(CCS_DIR);
+      fs.appendFileSync(LOG_FILE, line);
+    } catch { /* 日志失败忽略 */ }
+    return r;
+  } catch { return null; }
+}
+
 function enable() {
   try { fs.unlinkSync(DISABLED_FILE); } catch { /* 本来就不存在 */ }
   _installPyHelpers();
   const pid = _readPid();
   if (!pid || !_pidAlive(pid)) _spawnMonitor();
+  _tryAutostart('install');
   return getStatus();
 }
 
@@ -111,7 +127,20 @@ function disable() {
   ensureDir(CCS_DIR);
   fs.writeFileSync(DISABLED_FILE, '');
   _killMonitor();
+  _tryAutostart('remove');
   return getStatus();
 }
 
-module.exports = { getStatus, enable, disable };
+// 看门狗：开关开但守护没在跑就拉起来；开关关或已在跑则什么都不做。
+// 被 Web UI 状态轮询、CLI `ccs monitor revive`、任务计划程序共同复用。
+function revive() {
+  const enabled = !fileExists(DISABLED_FILE);
+  if (!enabled) return { revived: false, reason: 'disabled' };
+  const pid = _readPid();
+  if (pid && _pidAlive(pid)) return { revived: false, reason: 'already-running', pid };
+  _installPyHelpers();
+  _spawnMonitor();
+  return { revived: true };
+}
+
+module.exports = { getStatus, enable, disable, revive };

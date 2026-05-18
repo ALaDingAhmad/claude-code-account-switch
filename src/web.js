@@ -237,9 +237,11 @@ function startWebServer(port, openBrowser, onReady) {
 
     if (req.method === 'GET' && url.pathname === '/api/monitor/status') {
       try {
+        // 兜底看门狗：发现 enabled 但守护没在跑，立刻拉起来
+        const r = monitor.revive();
         const s = monitor.getStatus();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, ...s }));
+        return res.end(JSON.stringify({ ok: true, ...s, revived: !!r.revived }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: false, error: e.message }));
