@@ -94,15 +94,32 @@ function maskToken(token) {
   return `${token.slice(0, 12)}...${token.slice(-4)}`;
 }
 
+// Windows 下 Node 不读 TZ 环境变量，会用系统时区。如果用户系统是上海但想看东京时间，
+// 可设 CCS_DISPLAY_TZ=Asia/Tokyo 覆盖；仅影响 ccs 自己的时间字符串显示，不动系统。
+function _formatLocal(date) {
+  const tz = process.env.CCS_DISPLAY_TZ;
+  if (tz) {
+    try {
+      return date.toLocaleString('zh-CN', {
+        timeZone: tz, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch { /* IANA 名称无效就回退默认 */ }
+  }
+  return date.toLocaleString();
+}
+
 function formatExpiry(expiresAt) {
   if (!expiresAt) return 'unknown';
   const date = new Date(expiresAt);
   const diff = expiresAt - Date.now();
-  if (diff <= 0) return `expired (${date.toLocaleString()})`;
+  const local = _formatLocal(date);
+  if (diff <= 0) return `expired (${local})`;
   const hours = Math.floor(diff / 3600000);
   const minutes = Math.floor((diff % 3600000) / 60000);
-  if (hours > 0) return `${hours}h ${minutes}m (${date.toLocaleString()})`;
-  return `${minutes}m (${date.toLocaleString()})`;
+  if (hours > 0) return `${hours}h ${minutes}m (${local})`;
+  return `${minutes}m (${local})`;
 }
 
 // 切换账号后清掉用量/profile 共享缓存，确保状态栏立即显示新账号数据

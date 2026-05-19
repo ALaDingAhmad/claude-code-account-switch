@@ -66,7 +66,7 @@ async function main() {
 
   console.log('Before:');
   console.log(`  access tail : ...${oauth.accessToken.slice(-12)}`);
-  console.log(`  expiresAt   : ${new Date(oauth.expiresAt).toLocaleString()} (${formatExpiry(oauth.expiresAt)})`);
+  console.log(`  expiresAt   : ${formatExpiry(oauth.expiresAt)}`);
 
   const { status, text } = await postJson(TOKEN_URL, {
     grant_type: 'refresh_token',
@@ -99,7 +99,7 @@ async function main() {
 
   console.log('After:');
   console.log(`  access tail : ...${newOauth.accessToken.slice(-12)}`);
-  console.log(`  expiresAt   : ${new Date(expiresAt).toLocaleString()} (${formatExpiry(expiresAt)})`);
+  console.log(`  expiresAt   : ${formatExpiry(expiresAt)}`);
   console.log(`  refresh rotated: ${newOauth.refreshToken !== oauth.refreshToken}`);
 
   // 同步到 ccs 快照（如果 active 账号是 OAuth）
