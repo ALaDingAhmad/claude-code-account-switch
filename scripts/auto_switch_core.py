@@ -83,8 +83,9 @@ def query_usage_for_token(token):
     except Exception as e:
         log(f'anthropic_http import failed: {e}')
         return ('error', None, None)
+    # helper 自己写日志 + 共享缓存（100s 内重复查同 token 直接返缓存）
     code, body, headers = request_anthropic(
-        'https://api.anthropic.com/api/oauth/usage', token, timeout=5)
+        'https://api.anthropic.com/api/oauth/usage', token, timeout=5, caller='switch-core')
     if code == 200:
         try:
             resp = json.loads(body)
@@ -95,11 +96,8 @@ def query_usage_for_token(token):
             return ('error', None, None)
     if code == 429:
         if is_real_anthropic_429(headers):
-            log('API HTTP 429 on usage query (anthropic backend)')
             return ('exhausted', None, None)
-        log('API HTTP 429 on usage query (cloudflare edge, after retry)')
         return ('error', None, None)
-    log(f'API HTTP {code} on usage query')
     return ('error', None, None)
 
 
@@ -122,7 +120,7 @@ def query_active_usage():
     except Exception:
         return None
     code, body, headers = request_anthropic(
-        'https://api.anthropic.com/api/oauth/usage', token, timeout=5)
+        'https://api.anthropic.com/api/oauth/usage', token, timeout=5, caller='switch-core')
     if code == 200:
         try:
             resp = json.loads(body)

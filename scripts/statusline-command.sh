@@ -33,13 +33,12 @@ rate7d=$(parse "rate_limits.seven_day.used_percentage")
 CLAUDE_DIR="$HOME/.claude"
 CREDS_PATH="$CLAUDE_DIR/.credentials.json"
 
-# 从 /api/oauth/usage 实时查用量（带缓存，TTL 60s）
+# 从 /api/oauth/usage 实时查用量。
+# 不再用本地 60s 文件缓存——统一走 anthropic_http helper 的共享 100s 缓存（~/.ccs/usage-shared-cache.json）
 usage_info=$(python3 -c "
-import json, os, sys, time, urllib.request, hashlib, subprocess
+import json, os, sys, subprocess
 
 CREDS = os.path.expanduser('~/.claude/.credentials.json')
-CACHE = os.path.expanduser('~/.claude/usage-cache.json')
-TTL = 60
 
 def read_token():
     # 先文件（Windows/Linux/WSL），再 Keychain（macOS 唯一来源）
@@ -63,39 +62,19 @@ def read_token():
 try:
     token = read_token()
     if not token:
-        print('', '')
+        print('', '', '')
         sys.exit()
-    token_hash = hashlib.md5(token.encode()).hexdigest()[:8]
 
-    if os.path.exists(CACHE):
-        cache = json.load(open(CACHE, encoding='utf-8'))
-        if cache.get('token_hash') == token_hash and time.time() - cache.get('ts', 0) < TTL:
-            d = cache['data']
-            print(d['five_hour'], d['seven_day'], d.get('five_hour_reset', ''))
-            sys.exit()
-
-    # 走共享 cookie jar（v3.10.2+）：~/.claude/anthropic_http.py 由 monitor 安装时一并复制
     sys.path.insert(0, os.path.expanduser('~/.claude'))
-    try:
-        from anthropic_http import request_anthropic
-        code, body, _ = request_anthropic('https://api.anthropic.com/api/oauth/usage', token, timeout=5)
-        if code != 200:
-            raise RuntimeError(f'http {code}')
-        resp = json.loads(body)
-    except Exception:
-        # helper 不存在或失败时退回直连一次（保留旧行为，避免新装用户没装 monitor 时状态栏完全坏掉）
-        req = urllib.request.Request(
-            'https://api.anthropic.com/api/oauth/usage',
-            headers={'Authorization': f'Bearer {token}', 'anthropic-beta': 'oauth-2025-04-20', 'Accept': 'application/json'}
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-    data = {
-        'five_hour': resp.get('five_hour', {}).get('utilization', ''),
-        'seven_day': resp.get('seven_day', {}).get('utilization', ''),
-        'five_hour_reset': resp.get('five_hour', {}).get('resets_at', ''),
-    }
-    json.dump({'token_hash': token_hash, 'ts': time.time(), 'data': data}, open(CACHE, 'w'))
-    print(data['five_hour'], data['seven_day'], data['five_hour_reset'])
+    from anthropic_http import request_anthropic
+    code, body, _ = request_anthropic('https://api.anthropic.com/api/oauth/usage', token, timeout=5, caller='statusline')
+    if code != 200:
+        print('', '', '')
+        sys.exit()
+    resp = json.loads(body)
+    fh = resp.get('five_hour', {}) or {}
+    sd = resp.get('seven_day', {}) or {}
+    print(fh.get('utilization', ''), sd.get('utilization', ''), fh.get('resets_at', ''))
 except Exception:
     print('', '', '')
 " 2>/dev/null)
@@ -181,13 +160,11 @@ if [ -n "$rate7d" ]; then
   fi
 fi
 
-# === 第三行：用户信息（实时 API，带缓存）===
+# === 第三行：用户信息（统一走 anthropic_http helper 的共享缓存）===
 user_info=$(python3 -c "
-import json, os, sys, time, urllib.request, hashlib, subprocess
+import json, os, sys, subprocess
 
 CREDS = os.path.expanduser('~/.claude/.credentials.json')
-CACHE = os.path.expanduser('~/.claude/profile-cache.json')
-TTL = 300  # 5分钟缓存
 
 def read_token():
     if os.path.exists(CREDS):
@@ -211,37 +188,19 @@ try:
     token = read_token()
     if not token:
         sys.exit()
-    token_hash = hashlib.md5(token.encode()).hexdigest()[:8]
-
-    if os.path.exists(CACHE):
-        cache = json.load(open(CACHE, encoding='utf-8'))
-        if cache.get('token_hash') == token_hash and time.time() - cache.get('ts', 0) < TTL:
-            d = cache['data']
-            print(d['name'], '|', d['email'], '|', d['plan'])
-            sys.exit()
 
     sys.path.insert(0, os.path.expanduser('~/.claude'))
-    try:
-        from anthropic_http import request_anthropic
-        code, body, _ = request_anthropic('https://api.anthropic.com/api/oauth/profile', token, timeout=5)
-        if code != 200:
-            raise RuntimeError(f'http {code}')
-        resp = json.loads(body)
-    except Exception:
-        req = urllib.request.Request(
-            'https://api.anthropic.com/api/oauth/profile',
-            headers={'Authorization': f'Bearer {token}', 'anthropic-beta': 'oauth-2025-04-20', 'Accept': 'application/json'}
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
+    from anthropic_http import request_anthropic
+    code, body, _ = request_anthropic('https://api.anthropic.com/api/oauth/profile', token, timeout=5, caller='statusline')
+    if code != 200:
+        sys.exit()
+    resp = json.loads(body)
     org_type = resp.get('organization', {}).get('organization_type', '')
     plan_map = {'claude_max': 'Max', 'claude_pro': 'Pro', 'claude_enterprise': 'Enterprise', 'claude_team': 'Team'}
-    data = {
-        'name': resp['account'].get('display_name', ''),
-        'email': resp['account'].get('email', ''),
-        'plan': plan_map.get(org_type, org_type),
-    }
-    json.dump({'token_hash': token_hash, 'ts': time.time(), 'data': data}, open(CACHE, 'w'))
-    print(data['name'], '|', data['email'], '|', data['plan'])
+    name = resp.get('account', {}).get('display_name', '')
+    email = resp.get('account', {}).get('email', '')
+    plan = plan_map.get(org_type, org_type)
+    print(name, '|', email, '|', plan)
 except Exception:
     pass
 " 2>/dev/null)

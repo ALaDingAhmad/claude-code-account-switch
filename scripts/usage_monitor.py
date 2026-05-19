@@ -119,7 +119,7 @@ def _query_active_usage():
     except Exception:
         return None, None
     code, body, headers = request_anthropic(
-        'https://api.anthropic.com/api/oauth/usage', token, timeout=8)
+        'https://api.anthropic.com/api/oauth/usage', token, timeout=8, caller='monitor')
     if code == 200:
         try:
             resp = json.loads(body)
@@ -129,11 +129,10 @@ def _query_active_usage():
             return None, None
     if code == 429:
         # 区分真 429（Anthropic 后端，含用尽）vs Cloudflare 边缘 429
+        # helper 已写日志，这里不再重复
         if is_real_anthropic_429(headers):
             return None, 429
-        # Cloudflare 拦的（已由 helper 重试 1 次仍失败）：当作普通临时错误，让主循环 60s 重试
-        log(f'cf-429 not from anthropic backend, treat as transient')
-        return None, None
+        return None, None  # cf-edge 429 当临时错误，主循环 60s 重试
     return None, code
 
 

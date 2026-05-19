@@ -13,8 +13,10 @@ const CLAUDE_STATE_PATH =
 const CLAUDE_SETTINGS_PATH =
   process.env.CLAUDE_SETTINGS_PATH || path.join(CLAUDE_DIR, 'settings.json');
 
-const PROFILE_CACHE_PATH = path.join(CLAUDE_DIR, 'profile-cache.json');
-const USAGE_CACHE_PATH = path.join(CLAUDE_DIR, 'usage-cache.json');
+const SHARED_USAGE_CACHE_PATH = path.join(
+  process.env.CCS_HOME || path.join(HOME, '.ccs'),
+  'usage-shared-cache.json'
+);
 
 const CCS_DIR = process.env.CCS_HOME || path.join(HOME, '.ccs');
 const CONFIG_PATH = path.join(CCS_DIR, 'config.json');
@@ -103,11 +105,9 @@ function formatExpiry(expiresAt) {
   return `${minutes}m (${date.toLocaleString()})`;
 }
 
-// 切换账号后用新 token 调用 /api/oauth/usage，触发 Claude Code 进程检测到
-// credentials 文件 mtime 变化，清除 memoize 缓存，从而立即使用新 token。
+// 切换账号后清掉用量/profile 共享缓存，确保状态栏立即显示新账号数据
 function clearProfileCache() {
-  try { if (fs.existsSync(PROFILE_CACHE_PATH)) fs.unlinkSync(PROFILE_CACHE_PATH); } catch { /* ignore */ }
-  try { if (fs.existsSync(USAGE_CACHE_PATH)) fs.unlinkSync(USAGE_CACHE_PATH); } catch { /* ignore */ }
+  try { if (fs.existsSync(SHARED_USAGE_CACHE_PATH)) fs.unlinkSync(SHARED_USAGE_CACHE_PATH); } catch { /* ignore */ }
 }
 
 function _pingOauth(token, apiPath) {
@@ -244,8 +244,6 @@ module.exports = {
   CREDENTIALS_PATH,
   CLAUDE_STATE_PATH,
   CLAUDE_SETTINGS_PATH,
-  PROFILE_CACHE_PATH,
-  USAGE_CACHE_PATH,
   CCS_DIR,
   CONFIG_PATH,
   ACCOUNTS_DIR,
