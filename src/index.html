@@ -340,9 +340,9 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
   <div class="import-card" id="monitor-section">
     <p style="margin-bottom:14px;color:var(--text-dim);font-size:13px;line-height:1.6">
       <b>不依赖状态栏，独立守护进程定期查询 5h 用量，撞墙前自动切换账号。</b><br>
-      active 5h ≥ 90% 时自动启动守护，90–95% 每 60s 查一次，96–99% 每 10s 查一次，≥99% 或遇到 429 立即切换。<br>
+      每 100s 查一次 5h 用量，≥99% 或确认撞墙立即切换。<br>
       切换后状态栏第四行显示灰色提示「最近切到 X（HH:MM）」，5 分钟后自动消失。<br>
-      关闭开关将停止守护进程；下次 5h 再升到 90% 时若开关开启会自动重新启动。
+      关闭开关将停止守护进程，再勾选即重新启动并自动恢复运行。
     </p>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px">

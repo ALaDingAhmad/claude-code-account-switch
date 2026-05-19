@@ -1,13 +1,11 @@
 """用量监控守护进程。
 
 调度循环：
-  5h < 90        → 100s 轮询，闲时省查询（v3.10.2 拆分自旧 60s）
-  90 <= 5h < 96  → 60s 轮询
-  96 <= 5h < 99  → 10s 轮询
+  5h < 99        → 100s 轮询（与共享缓存 TTL 对齐，实测更密会触发 cf-429）
   5h >= 99       → 切换（成功也不退出，继续盯新 active）
-  429            → 当作 active 用尽，写表 + 切换（v3.10.2+）
-  其他错误       → 固定 60s 重试（v3.10.1+）
-  全候选用尽     → sleep 到最早 reset + 60s 再醒（v3.10.2+）
+  真 429         → 当作 active 用尽，写表 + 切换
+  cf-429 / 错误  → 100s 重试
+  全候选用尽     → sleep 到最早 reset + 60s 再醒
   disabled 文件  → 退出
   运行超 7 天    → 退出（兜底）
 
@@ -21,12 +19,11 @@ PID_FILE  = os.path.expanduser('~/.ccs/usage-monitor.pid')
 LOG       = os.path.expanduser('~/.ccs/auto-switch.log')
 DISABLED  = os.path.expanduser('~/.ccs/usage-monitor.disabled')
 
-MONITOR_THRESHOLD  = 90   # 低于此值退出
-FAST_THRESHOLD     = 96   # 高于此值进入 10s 模式
+MONITOR_THRESHOLD  = 90   # 用量分档阈值（保留，未来想分档时改 INTERVAL_SLOW 即可）
 SWITCH_THRESHOLD   = 99   # 高于此值触发切换
-INTERVAL_IDLE      = 100  # 5h < 90% 闲时轮询间隔（v3.10.2 拆分；越闲查得越稀）
-INTERVAL_SLOW      = 60   # 90–95%、错误重试、切换失败重试
-INTERVAL_FAST      = 10   # 96–98% 临界期
+INTERVAL_IDLE      = 100  # 5h < 90% 闲时轮询间隔
+INTERVAL_SLOW      = 100  # 90-98% 紧密期、错误重试、切换失败重试（v3.10.4 起统一 100s）
+# v3.10.4 起两档都 100s：与共享缓存 TTL 对齐；实测 30s 会触发 Cloudflare 边缘 429
 MAX_ERRORS         = 5
 MAX_RUNTIME        = 86400 * 7  # 7 天（实质无限，disabled 文件才是真正的停止信号）
 
@@ -290,10 +287,9 @@ def main():
                 break
             continue
 
-        # 90-99% 之间，按频率轮询
-        interval = INTERVAL_FAST if five_hour >= FAST_THRESHOLD else INTERVAL_SLOW
-        log(f'monitor: 5h={five_hour}%, next check in {interval}s')
-        if _sleep_responsive(interval):
+        # 90-98% 之间，紧密轮询（60s）；99%+ 已在上面切换分支处理
+        log(f'monitor: 5h={five_hour}%, next check in {INTERVAL_SLOW}s')
+        if _sleep_responsive(INTERVAL_SLOW):
             break
 
     _remove_pid()

@@ -23,6 +23,18 @@ LOG_FILE    = os.path.join(CCS_DIR, 'auto-switch.log')
 
 CACHE_TTL = 100  # 秒；与 monitor 闲时轮询节奏一致
 
+# 排查开关：以下任一开启即每次真请求把请求头 + 响应头完整写到 ~/.ccs/debug-http.log
+#   - 环境变量 CCS_HTTP_DEBUG=1
+#   - 存在 ~/.ccs/http-debug.flag 文件
+# 适合跨进程统一开关（状态栏/守护/CLI 子进程都看得到）。日常运行=零开销。
+_DEBUG_FLAG_FILE = os.path.join(CCS_DIR, 'http-debug.flag')
+_DEBUG_FILE = os.path.join(CCS_DIR, 'debug-http.log')
+
+def _debug_enabled():
+    if os.environ.get('CCS_HTTP_DEBUG') == '1':
+        return True
+    return os.path.exists(_DEBUG_FLAG_FILE)
+
 _jar = None
 _opener = None
 
@@ -80,6 +92,18 @@ def _save_jar():
         pass
 
 
+def _debug_dump(line):
+    """debug 开关开启时把诊断信息追加到 debug-http.log；否则零开销 noop"""
+    if not _debug_enabled():
+        return
+    try:
+        with open(_DEBUG_FILE, 'a', encoding='utf-8') as f:
+            ts = datetime.now().strftime('%F %T')
+            f.write(f'[{ts}] pid={os.getpid()} ppid={os.getppid()} {line}\n')
+    except Exception:
+        pass
+
+
 def _do_request(url, token, timeout, beta):
     """单次真请求，返回 (code, body, headers)。不带任何重试 / 缓存。"""
     opener = _get_opener()
@@ -88,18 +112,30 @@ def _do_request(url, token, timeout, beta):
         'anthropic-beta': beta,
         'Accept': 'application/json',
     })
+    if _debug_enabled():
+        jar_cookies = []
+        if _jar:
+            for c in _jar:
+                if 'anthropic' in (c.domain or ''):
+                    jar_cookies.append(f'{c.name}={c.value[:20]}...')
+        _debug_dump(f'REQ {url}')
+        _debug_dump(f'  req-headers={dict(req.header_items())}')
+        _debug_dump(f'  jar-cookies={jar_cookies}')
     try:
         r = opener.open(req, timeout=timeout)
         body = r.read()
         headers = dict(r.getheaders())
         _save_jar()
+        _debug_dump(f'  RESP code={r.getcode()} headers={headers}')
         return r.getcode(), body, headers
     except urllib.error.HTTPError as e:
         body = e.read() if hasattr(e, 'read') else b''
         headers = dict(e.headers.items()) if e.headers else {}
         _save_jar()
+        _debug_dump(f'  RESP code={e.code} headers={headers} body[:200]={body[:200]!r}')
         return e.code, body, headers
     except Exception as e:
+        _debug_dump(f'  EXC {type(e).__name__}: {e}')
         return None, b'', {'_exc': str(e)}
 
 
@@ -128,27 +164,29 @@ def _summarize(url, code, body, headers):
 
 
 def request_anthropic(url, token, timeout=8, beta='oauth-2025-04-20',
-                      caller='unknown', allow_cache=True):
+                      caller='unknown', allow_cache=True, ttl=None):
     """请求 Anthropic OAuth 端点（带共享缓存 + 日志）。
 
     Args:
         url: 完整 URL，如 'https://api.anthropic.com/api/oauth/usage'
         token: OAuth access token
         caller: 调用方标识（monitor / statusline / switch-core），写入日志
-        allow_cache: True 则优先用 100s 内的缓存结果；False 强制真请求
+        allow_cache: True 则优先用缓存内的结果；False 强制真请求
+        ttl: 此次调用接受的最大缓存年龄（秒）。None 用全局默认 CACHE_TTL(100s)。
+             状态栏可传 30 让自己实时性更高，但仍能命中 monitor 写下的新鲜缓存。
 
     Returns:
         (code:int|None, body:bytes, headers:dict)
-        from_cache 信息只在日志体现，不返回。
     """
     th = _token_hash(token)
     cache_key = f'{th}:{url}'
     now = time.time()
+    max_age = ttl if ttl is not None else CACHE_TTL
 
     if allow_cache:
         cache = _load_cache()
         entry = cache.get(cache_key)
-        if entry and (now - entry.get('ts', 0)) < CACHE_TTL:
+        if entry and (now - entry.get('ts', 0)) < max_age:
             # cache-hit 静默不写日志——避免状态栏每秒 tick 把日志刷成噪音
             # 真请求（下面）和异常路径才写日志
             body = bytes.fromhex(entry.get('body_hex', '')) if entry.get('body_hex') else b''
