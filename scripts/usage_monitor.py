@@ -1,22 +1,22 @@
 """用量监控守护进程。
 
-调度循环（v3.10.7 起）：
+调度循环（v3.10.8 起，判定大幅简化）：
   每 10s 一轮：
-    心跳静默   → idle-recheck（5min 一次只看心跳，不读缓存不发请求）
-    缓存新鲜   → 用缓存里的 usage 数据走决策（状态栏每次刷新会写新鲜缓存）
-    缓存 stale → 自己发请求（_query_active_usage）
+    心跳静默        → idle-recheck（5min 一次只看心跳，不读缓存不发请求）
+    缓存新鲜 + 200  → 用缓存里的 5h 走决策（状态栏每次刷新会写新鲜缓存）
+    缓存 stale/non200 → 自己发请求（_query_active_usage，100s 节流）
 
-  5h < 99        → 继续看缓存 / 100s 后再自己查
-  5h >= 99       → 切换（成功也不退出，继续盯新 active）
-  真 429         → 当作 active 用尽，写表 + 切换
-  cf-429 / 错误  → 100s 后再自己查（活跃时）
-  全候选用尽     → sleep 到最早 reset + 60s 再醒
-  disabled 文件  → 退出
-  运行超 7 天    → 退出（兜底）
+  拿到 5h 后判定：
+    5h >= 99       → 切换（成功也不退出，继续盯新 active）
+    5h < 99        → 10s 一拍继续盯
+  查询失败/无数据  → 10s 后再看缓存
+  全候选用尽       → sleep 到最早 reset + 60s 再醒
+  disabled 文件    → 退出
+  运行超 7 天      → 退出（兜底）
 
-设计核心：状态栏每次刷新都会把最新 usage 写入 ~/.ccs/usage-shared-cache.json，守护只看
-缓存就能拿到秒级新鲜数据，自己仅在缓存 stale 时才发请求。响应延迟从 100s 降到 ≤10s，
-HTTP 请求量基本不增加（状态栏本来就在打）。
+设计核心：业务用尽时状态栏查 /api/oauth/usage 拿到的是 200 + 100%（实测验证），
+守护只需要读到 100% 就切，不再依赖"真 429 vs cf-edge 429"的脆弱判断
+（cf 提前拦截会让真用尽被误判为查询限流）。响应延迟 ≤10s。
 
 单例保护：~/.ccs/usage-monitor.pid
 """
@@ -144,11 +144,12 @@ def _read_cached_usage(token):
 
     返回 (five_hour, resets_at, extra, age_s)：
       - (float, str, None, age)      : 缓存里是 200，正常用量数据
-      - (None, '',  429, age)        : 缓存里是真 429（active 用尽）
-      - (None, '',  'cf429', age)    : 缓存里是 cf-edge 429
+      - (None, None, 'no-data', age) : 缓存里是 429 / 5xx / 解析失败等，没有有效 5h 数据
       - (None, None, 'miss', None)   : 缓存里没这个条目（首次启动 / token 刚换）
-      - (None, None, 'parse', age)   : 缓存解析失败（极少见）
     age_s 是 entry 距今秒数；'miss' 时为 None。
+
+    v3.10.8：不再区分 429 子类型。业务用尽时状态栏拿到的是 200 + 100%，
+    缓存里的 429 一律按"暂未读到有效数据"处理，下一轮 10s 后再看。
     """
     if not token:
         return (None, None, 'miss', None)
@@ -162,33 +163,22 @@ def _read_cached_usage(token):
     if not entry:
         return (None, None, 'miss', None)
     age = time.time() - entry.get('ts', 0)
-    code = entry.get('code')
-    if code == 200:
+    if entry.get('code') == 200:
         try:
             body = bytes.fromhex(entry.get('body_hex', '')) if entry.get('body_hex') else b''
             resp = json.loads(body)
             fh = resp.get('five_hour') or {}
             return (float(fh.get('utilization') or 0.0), fh.get('resets_at') or '', None, age)
         except Exception:
-            return (None, None, 'parse', age)
-    if code == 429:
-        # 区分真 429 / cf-edge 429——和 _query_active_usage 同款判定
-        headers = entry.get('headers') or {}
-        if 'anthropic-organization-id' in headers:
-            return (None, '', 429, age)
-        return (None, '', 'cf429', age)
-    # 其他状态码（5xx / token 失效等）当作 miss 让守护自己重试
-    return (None, None, 'miss', age)
+            pass
+    return (None, None, 'no-data', age)
 
 
 def _query_active_usage():
     """查 ~/.claude/.credentials.json 里 token 的 5h 用量。
-    返回 (five_hour:float, extra)：
-      - (float, str)  : 查到数据，extra=resets_at
-      - (None, 429)   : 真 429（Anthropic 后端，业务上视为 active 用尽）
-      - (None, 'cf429'): Cloudflare 边缘 429（查询限流，不是用尽）
-      - (None, None)  : 其他错误（网络、5xx、token 失效等）
-    走 anthropic_http 共享 cookie jar，避免 Cloudflare _cfuvid 缺失导致的边缘 429。"""
+    返回 (five_hour:float, resets_at:str) 或 (None, None)。
+    走 anthropic_http 共享 cookie jar，避免 Cloudflare _cfuvid 缺失导致的边缘 429。
+    v3.10.8：不再区分 429 子类型——任何非 200 一律视为"这轮没拿到"。"""
     creds = os.path.expanduser('~/.claude/.credentials.json')
     if not os.path.exists(creds):
         return None, None
@@ -199,12 +189,12 @@ def _query_active_usage():
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         sys.path.insert(0, script_dir)
-        from anthropic_http import request_anthropic, is_real_anthropic_429
+        from anthropic_http import request_anthropic
     except Exception:
         return None, None
     # 守护是兜底自查，必然是缓存 stale 时才走到——明确禁用 helper 内的缓存层
     # 避免读到 100s+ 的旧缓存还以为查到了。
-    code, body, headers = request_anthropic(
+    code, body, _headers = request_anthropic(
         'https://api.anthropic.com/api/oauth/usage', token, timeout=8,
         caller='monitor', allow_cache=False)
     if code == 200:
@@ -213,13 +203,7 @@ def _query_active_usage():
             fh = resp.get('five_hour') or {}
             return float(fh.get('utilization') or 0.0), fh.get('resets_at') or ''
         except Exception:
-            return None, None
-    if code == 429:
-        # 区分真 429（Anthropic 后端，含用尽）vs Cloudflare 边缘 429
-        # v3.10.6 起 cf-edge 429 用字符串 'cf429' 标识，主循环用它触发心跳门控
-        if is_real_anthropic_429(headers):
-            return None, 429
-        return None, 'cf429'
+            pass
     return None, None
 
 
@@ -340,10 +324,18 @@ def main():
         token = _active_token()
         five_hour, resets_at, extra, age = _read_cached_usage(token)
 
-        cache_fresh = (age is not None and age < CACHE_MAX_AGE
-                       and extra not in ('miss', 'parse'))
+        # v3.10.8：判定大幅简化——只看 five_hour 百分比，不再区分真 429 / cf-edge 429。
+        # 业务用尽时状态栏查 /api/oauth/usage 拿到的是 200 + 100%（多次实测验证），
+        # 守护读到 100% 就切，比之前判 429 头部可靠得多。
+        # 缓存里如果是 429（任何种类）当作"暂未读到有效数据"，下一轮 10s 后再看。
+        cache_fresh = (
+            age is not None
+            and age < CACHE_MAX_AGE
+            and extra is None  # _read_cached_usage：extra=None 表示 200/有效 5h；其他都不是有效数据
+            and five_hour is not None
+        )
         if not cache_fresh:
-            # 缓存不可用：节流 + 自己发请求
+            # 缓存里没有有效数据：节流后自己发请求
             now = time.time()
             if now - last_self_query < CACHE_MAX_AGE:
                 # 距上次自查不到 100s，再等一拍看状态栏会不会写新值
@@ -351,63 +343,18 @@ def main():
                     break
                 continue
             last_self_query = now
-            five_hour, q_extra = _query_active_usage()
-            # 把查询结果回填到决策变量（_query_active_usage 已自动写共享缓存）
-            if isinstance(q_extra, str) and q_extra in ('cf429',):
-                extra = q_extra
-                resets_at = ''
-            elif q_extra == 429:
-                extra = 429
-                resets_at = ''
-            elif q_extra is None and five_hour is None:
-                extra = 'query-failed'
-                resets_at = ''
+            q_five_hour, q_reset = _query_active_usage()
+            if q_five_hour is not None:
+                five_hour = q_five_hour
+                resets_at = q_reset or ''
             else:
-                # 200 OK，q_extra 是 resets_at 字符串
-                extra = None
-                resets_at = q_extra or ''
-
-        # —— 决策分支 ——
-
-        # 真 429 → active 用尽：写表标用尽 + 切换
-        if extra == 429:
-            log('monitor: 429 (active exhausted), attempting switch')
-            r = _do_switch(None, '', force=True, active_got_429=True)
-            next_reset = r.get('next_reset_at')
-            if r['switched'] and next_reset:
-                if _sleep_until_reset(next_reset):
+                errors += 1
+                log(f'monitor: no usage data this tick ({errors}), waiting for fresh cache')
+                if _sleep_responsive(CACHE_TICK):
                     break
                 continue
-            if r['switched']:
-                if _sleep_responsive(INTERVAL_SLOW):
-                    break
-                continue
-            if next_reset:
-                if _sleep_until_reset(next_reset):
-                    break
-                continue
-            if _sleep_responsive(INTERVAL_SLOW):
-                break
-            continue
 
-        # cf-edge 429：查询限流，不是用尽。下一轮 10s 后再看缓存（状态栏可能写入新值）。
-        # 心跳门控已在循环顶处理；走到这里说明用户活跃或在宽限期。
-        if extra == 'cf429':
-            errors += 1
-            log(f'monitor: cf-edge 429 ({errors}), waiting for fresh cache')
-            if _sleep_responsive(CACHE_TICK):
-                break
-            continue
-
-        # 查询失败（网络、5xx、token 失效等）：10s 后再看缓存
-        if extra == 'query-failed' or five_hour is None:
-            errors += 1
-            log(f'monitor: query failed ({errors}), waiting for fresh cache')
-            if _sleep_responsive(CACHE_TICK):
-                break
-            continue
-
-        errors = 0  # 查到数据就重置
+        errors = 0  # 拿到有效数据就重置
 
         # 用量低于 90%：闲时不动；每 10min 记一条心跳日志确认守护活着
         if five_hour < MONITOR_THRESHOLD:
