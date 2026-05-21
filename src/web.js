@@ -80,8 +80,16 @@ function startWebServer(port, openBrowser, onReady) {
         const store = new AccountStore();
         const status = store.getStatus();
         const accounts = store.listAccounts();
+        // 用量表（守护和切换核心在维护）：让前端在账号卡片上展示每个号的 5h / reset
+        let usageTable = {};
+        try {
+          const usagePath = path.join(require('os').homedir(), '.ccs', 'account-usage.json');
+          if (fs.existsSync(usagePath)) {
+            usageTable = JSON.parse(fs.readFileSync(usagePath, 'utf8')) || {};
+          }
+        } catch { /* ignore */ }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, ...status, accounts }));
+        return res.end(JSON.stringify({ ok: true, ...status, accounts, usageTable }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: false, error: e.message }));

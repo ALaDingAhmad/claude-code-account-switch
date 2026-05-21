@@ -1,5 +1,8 @@
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const {
+  CCS_DIR,
   CONFIG_PATH,
   CREDENTIALS_PATH,
   CLAUDE_STATE_PATH,
@@ -21,6 +24,53 @@ const {
   liveCredentialsExist,
   IS_MAC,
 } = require('./utils');
+
+const USAGE_TABLE_PATH = path.join(CCS_DIR, 'account-usage.json');
+const SHARED_CACHE_PATH = path.join(CCS_DIR, 'usage-shared-cache.json');
+const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+
+// v3.11.2：切换前把"被切走的当前号"的 5h 用量数据写进 account-usage.json。
+// 数据来源：共享缓存（状态栏/守护刚查过的最新结果）。这是表里唯一的"active 写入时机"——
+// 表的语义是切换流水账，不是实时监控；实时数据走共享缓存。
+function writeActiveUsageSnapshot(activeAccount) {
+  if (!activeAccount) return { ok: false, reason: 'no active' };
+  try {
+    // 1. 读旧 active token
+    if (!fileExists(CREDENTIALS_PATH)) return { ok: false, reason: 'no live credentials' };
+    const live = readJson(CREDENTIALS_PATH);
+    const token = live?.claudeAiOauth?.accessToken;
+    if (!token) return { ok: false, reason: 'no access token in credentials' };
+
+    // 2. 读共享缓存里这个 token 的 usage entry
+    if (!fileExists(SHARED_CACHE_PATH)) return { ok: false, reason: 'shared cache missing' };
+    const hash = crypto.createHash('md5').update(token).digest('hex').slice(0, 8);
+    const cache = readJson(SHARED_CACHE_PATH);
+    const entry = cache[`${hash}:${USAGE_URL}`];
+    if (!entry || entry.code !== 200) return { ok: false, reason: 'no fresh 200 in shared cache' };
+
+    // 3. 解析 body 拿 5h + reset
+    const body = JSON.parse(Buffer.from(entry.body_hex || '', 'hex').toString('utf8'));
+    const fh = body.five_hour || {};
+    const fiveHour = (fh.utilization != null) ? Number(fh.utilization) : null;
+    const resetsAt = fh.resets_at || '';
+    if (fiveHour === null) return { ok: false, reason: 'no five_hour in body' };
+
+    // 4. 写表
+    let table = {};
+    if (fileExists(USAGE_TABLE_PATH)) {
+      try { table = readJson(USAGE_TABLE_PATH) || {}; } catch { table = {}; }
+    }
+    table[activeAccount] = {
+      five_hour: fiveHour,
+      resets_at: resetsAt,
+      checked_at: new Date().toISOString(),
+    };
+    atomicWriteJson(USAGE_TABLE_PATH, table);
+    return { ok: true, fiveHour, resetsAt };
+  } catch (e) {
+    return { ok: false, reason: `exception: ${e.message}` };
+  }
+}
 
 class AccountStore {
   constructor() {
@@ -208,6 +258,14 @@ class AccountStore {
     const n = sanitizeName(name);
     const acct = this._config.accounts[n];
     if (!acct) throw new Error(`Unknown account "${n}"`);
+
+    // v3.11.2：切换前把被切走的当前号 5h 数据写入 account-usage.json（流水账）。
+    // 数据从共享缓存读取——状态栏 / 守护刚查过的最新结果。
+    // 切换到自己时跳过（活账户没换）。
+    const prevActive = this._config.activeAccount;
+    if (prevActive && prevActive !== n) {
+      writeActiveUsageSnapshot(prevActive);
+    }
 
     if (n !== this._config.activeAccount) this._syncActiveSnapshot();
 

@@ -453,9 +453,27 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// v3.11.x：账号卡片上显示 5h 用量 / reset 时间。数据来自 ~/.ccs/account-usage.json
+// 由守护和切换核心维护——可能陈旧，但能让用户看到哪个号最早能恢复。
+function _formatUsageMeta(u) {
+  if (!u) return '';
+  const fh = (u.five_hour != null) ? Math.round(u.five_hour) + '%' : '—';
+  let resetStr = '—';
+  if (u.resets_at) {
+    try {
+      const d = new Date(u.resets_at);
+      if (!isNaN(d.getTime())) {
+        resetStr = d.toLocaleString();
+      }
+    } catch { /* keep — */ }
+  }
+  return '<span>5h: ' + fh + '</span><span>重置: ' + esc(resetStr) + '</span>';
+}
+
 function render(data) {
-  const { activeAccount, accounts } = data;
+  const { activeAccount, accounts, usageTable } = data;
   allAccounts = accounts;
+  const usage = usageTable || {};
 
   // Active
   const activeEl = document.getElementById('active-section');
@@ -514,6 +532,7 @@ function render(data) {
               (a.baseUrl ? '<span>' + esc(a.baseUrl) + '</span>' : '')
             : (a.emailAddress ? '<span>' + esc(a.emailAddress) + '</span>' : '') +
               '<span>' + esc(a.expiresIn || 'unknown') + '</span>') +
+          (isApiKey ? '' : _formatUsageMeta(usage[name])) +
         '</div>' +
       '</div>' +
       '<div class="acct-actions">' +

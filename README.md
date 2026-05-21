@@ -175,6 +175,11 @@ ccs monitor disable         # 停止并移除自启
 
 ## 版本变更
 
+- **v3.11.2**：守护重写 + 写表语义澄清。
+  - 守护主循环按 `doc/守护进程行为规则.md` 重写：删除 `_idle_recheck_loop` / `STARTUP_GRACE` 等过度设计；用户离开时不发请求但每 5s 检查心跳（之前 5min，导致用户回来感知慢）
+  - `account-usage.json` 表语义改为"切换流水账"：唯一写入时机是 `store.switchAccount` 触发——切换前把被切走的当前号 5h 数据（从共享缓存读）落表。Web UI 看到的就是切换那一刻的快照
+  - 撤回 v3.11.1 守护每轮写表（过度设计）
+- **v3.11.1**：Web UI 账号卡片显示每号 5h 用量和 reset 时间（来自 `~/.ccs/account-usage.json`）
 - **v3.11.0**：Web UI 顶部加「升级」「重启」按钮。升级跑 `npm install -g claude-code-account-switch@latest`；重启按钮用 spawn+wait 模型——立刻 spawn 新进程带 `--wait-for-pid`，新进程自己等旧 pid 死+端口可绑再启，原端口接管。`startWebServer` 加 already-running 守卫避免多实例占多端口。状态栏和守护新增 stale 检测：升级 ccs 后已装脚本与源码不一致 / 进程未重启加载新代码时，Web UI 显示橙色提示
 - **v3.10.8**：守护判定大幅简化——只看 `five_hour` 百分比 ≥99 就切，不再依赖 cf-edge 429 / 真 429 头部判断。业务用尽时状态栏拿到的是 200 + 100%，比 429 头部识别可靠得多；之前"用量 96% 跳用尽 + 查询过频被 cf 拦"的边界 case 被彻底消除
 - **v3.10.7**：守护改为缓存优先调度——每 10s 看一次状态栏写入的共享缓存，缓存新鲜就直接走决策，stale 才自己发请求。99% 触发切换的响应延迟从最坏 100s 降到 ≤10s。同步修复 Windows 上自动切换时一闪而过的命令窗口
