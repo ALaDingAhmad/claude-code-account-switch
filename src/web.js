@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const AccountStore = require('./store');
-const { triggerCacheInvalidation, writeWebPid, clearWebPid } = require('./utils');
+const { triggerCacheInvalidation, writeWebPid, readWebPid, clearWebPid } = require('./utils');
 const share = require('./share');
 const statusline = require('./statusline');
 const monitor = require('./monitor');
@@ -12,14 +12,31 @@ const HTML_PATH = path.join(__dirname, 'index.html');
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function startWebServer(port, openBrowser, onReady) {
+  // 已有活 Web 就拒绝启动，避免污染 web.pid 和端口偏移。
+  // readWebPid 已内置存活检查：返 null = 文件不存在 / pid 已死；任一种都清掉陈旧记录后正常启动。
+  const existing = readWebPid();
+  if (existing) {
+    console.error(`ccs web already running (pid=${existing.pid}, port=${existing.port}). Use "ccs web stop" first.`);
+    process.exit(1);
+  }
+  clearWebPid();  // pid 死了就清掉文件，避免后面误判
+
   let idleTimer = null;
+  let actualBoundPort = port;  // /api/web/restart 用：实际监听的端口（可能因冲突偏移）
   const cancelIdle = () => {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   };
 
-  process.on('exit', clearWebPid);
-  process.on('SIGINT', () => { clearWebPid(); process.exit(0); });
-  process.on('SIGTERM', () => { clearWebPid(); process.exit(0); });
+  // 只清自己写下的 web.pid（重启 spawn 时新进程已覆盖了文件，旧进程别清新进程的记录）
+  const clearOwnWebPid = () => {
+    try {
+      const cur = readWebPid();
+      if (cur && cur.pid === process.pid) clearWebPid();
+    } catch { /* ignore */ }
+  };
+  process.on('exit', clearOwnWebPid);
+  process.on('SIGINT', () => { clearOwnWebPid(); process.exit(0); });
+  process.on('SIGTERM', () => { clearOwnWebPid(); process.exit(0); });
   const resetIdle = () => {
     cancelIdle();
     if (share.getShareConfig()?.enabled) return;  // 启用 share（含被动方）后常驻
@@ -270,6 +287,83 @@ function startWebServer(port, openBrowser, onReady) {
       }
     }
 
+    // v3.11.0：重启 Web 服务（方案 B：spawn+wait）
+    //   1. 立刻 202 响应
+    //   2. 立刻 spawn 新进程，带 --wait-for-pid <旧pid>；新进程自己 wait 旧 pid 死 + 端口可绑
+    //   3. 旧进程 clearWebPid + server.close + exit
+    // 关键：新进程负责 wait + 绕开 already-running 守卫；旧进程只管干净退出。
+    // spawn 失败时旧进程不退出，至少保住服务。新进程启动失败浏览器 15s 超时报错。
+    if (req.method === 'POST' && url.pathname === '/api/web/restart') {
+      try {
+        const oldPid = process.pid;
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, restarting: true, oldPid, port: actualBoundPort }));
+        setTimeout(() => {
+          let spawned = false;
+          try {
+            const { spawn } = require('child_process');
+            const ccsBin = path.join(__dirname, '..', 'bin', 'ccs.js');
+            const logPath = path.join(require('os').homedir(), '.ccs', 'web.log');
+            const out = fs.openSync(logPath, 'a');
+            const err = fs.openSync(logPath, 'a');
+            const child = spawn(process.execPath,
+              [ccsBin, 'web', String(actualBoundPort), '--wait-for-pid', String(oldPid)],
+              { detached: true, stdio: ['ignore', out, err], windowsHide: true });
+            child.unref();
+            spawned = true;
+            console.log(`[restart] spawned new web pid=${child.pid} (waits for old pid=${oldPid}), exiting old`);
+          } catch (e) {
+            console.error(`[restart] spawn failed, keeping old alive: ${e.message}`);
+          }
+          if (!spawned) return;
+          try { clearWebPid(); } catch { /* ignore */ }
+          try { server.close(); } catch { /* ignore */ }
+          setTimeout(() => process.exit(0), 100);
+        }, 100);
+        return;
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
+    // v3.11.0：升级 ccs。跑 npm install -g claude-code-account-switch@latest，不自动重启
+    if (req.method === 'POST' && url.pathname === '/api/web/upgrade') {
+      try {
+        const { spawn } = require('child_process');
+        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+        const child = spawn(npmCmd, ['install', '-g', 'claude-code-account-switch@latest'], {
+          windowsHide: true,
+        });
+        let stdout = '', stderr = '';
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        const code = await new Promise((resolve, reject) => {
+          child.on('error', reject);
+          child.on('close', resolve);
+        });
+        // 升级成功后读新的 package.json 版本号（注意：当前进程仍是旧代码，需重启才生效）
+        let newVersion = null;
+        try {
+          const pkgPath = path.join(__dirname, '..', 'package.json');
+          // 清掉 require cache 以拿到最新 version（npm install -g 可能更新到同一路径或新路径）
+          delete require.cache[require.resolve(pkgPath)];
+          newVersion = require(pkgPath).version;
+        } catch { /* ignore */ }
+        res.writeHead(code === 0 ? 200 : 500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          ok: code === 0,
+          exitCode: code,
+          version: newVersion,
+          stdout: stdout.slice(-2000),
+          stderr: stderr.slice(-2000),
+        }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/share/sync-now') {
       try {
         const r = await share.syncOnce((m) => console.log(`[share] ${m}`));
@@ -365,6 +459,7 @@ function startWebServer(port, openBrowser, onReady) {
   const MAX_PORT_RETRY = 20;
 
   function onListen(actualPort) {
+    actualBoundPort = actualPort;  // /api/web/restart 需要拿到实际端口
     resetIdle();
     try { share.getNodeId(); } catch { /* ignore */ }
     try {

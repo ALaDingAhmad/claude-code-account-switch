@@ -7,6 +7,7 @@ const {
   atomicWriteJson,
   readJson,
   fileExists,
+  isInstalledStale,
 } = require('./utils');
 
 const SCRIPT_NAME = 'statusline-command.sh';
@@ -48,6 +49,16 @@ function getStatus() {
   const targetExists = fileExists(TARGET_PATH);
   const settings = readSettings();
   const statusLineInstalled = statusLineMatches(settings?.statusLine);
+  // v3.11.0：检测已安装脚本是否过期（升级 ccs 后没重装的常见情况）
+  // 源码里的 __CCS_VERSION__ 占位符要先替换成当前版本号，才能跟已装文件做内容比对
+  const version = (() => {
+    try { return require(path.join(__dirname, '..', 'package.json')).version || ''; }
+    catch { return ''; }
+  })();
+  const stale = statusLineInstalled && isInstalledStale(
+    SOURCE_PATH, TARGET_PATH,
+    (src) => src.replace(/__CCS_VERSION__/g, version)
+  );
   return {
     sourceExists,
     sourcePath: SOURCE_PATH,
@@ -56,6 +67,7 @@ function getStatus() {
     hookInstalled: statusLineInstalled,
     settingsPath: CLAUDE_SETTINGS_PATH,
     installed: targetExists && statusLineInstalled,
+    stale,
   };
 }
 

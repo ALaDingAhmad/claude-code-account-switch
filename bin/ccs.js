@@ -283,12 +283,14 @@ async function cmdWeb(rest) {
   let peer = null;
   let bind = null;
   let secret = null;
+  let waitForPid = null;  // v3.11.0：/api/web/restart spawn 新进程时带这个，等旧 pid 死再启
   for (let i = 0; i < rest.length; i++) {
     const k = rest[i];
     if (/^\d+$/.test(k)) port = parseInt(k, 10);
     else if (k === '--peer') { peer = rest[++i] || ''; }
     else if (k === '--bind') { bind = rest[++i] || null; }
     else if (k === '--secret') { secret = rest[++i] || null; }
+    else if (k === '--wait-for-pid') { waitForPid = parseInt(rest[++i], 10); }
     else throw new Error(`unknown option: ${k}`);
   }
   // 没显式给端口时，优先用上次成功监听的端口；否则用默认 7899
@@ -332,7 +334,40 @@ async function cmdWeb(rest) {
     return spawnDetachedWeb(port);
   }
 
+  if (waitForPid) {
+    await waitForRestart(waitForPid, port);
+  }
   startWebServer(port, true, null);
+}
+
+// /api/web/restart 用：等旧 pid 真死 + 端口可绑（最多 10s），保证新进程不会撞 already-running 守卫
+async function waitForRestart(oldPid, port) {
+  const net = require('net');
+  const deadline = Date.now() + 10000;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // 阶段 1：等旧 pid 死
+  while (Date.now() < deadline) {
+    let alive = false;
+    try { process.kill(oldPid, 0); alive = true; } catch { alive = false; }
+    if (!alive) break;
+    await sleep(100);
+  }
+
+  // 阶段 2：等端口可绑（旧进程死后 TIME_WAIT 还可能占着）
+  while (Date.now() < deadline) {
+    const ok = await new Promise((resolve) => {
+      const tester = net.createServer();
+      tester.once('error', () => { tester.close(); resolve(false); });
+      tester.once('listening', () => { tester.close(() => resolve(true)); });
+      tester.listen(port, '0.0.0.0');
+    });
+    if (ok) return;
+    await sleep(200);
+  }
+
+  console.error(`waitForRestart: timeout waiting for pid=${oldPid} to die and port=${port} to free`);
+  process.exit(1);
 }
 
 async function probePeerSelf(peerUrl, localNodeId) {

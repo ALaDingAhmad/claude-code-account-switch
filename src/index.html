@@ -264,6 +264,8 @@ select.input { appearance: none; background-image: url("data:image/svg+xml;utf8,
     </div>
     <div class="header-right" style="display:flex;align-items:center;gap:10px">
       <span id="poll"></span>
+      <button class="btn" id="btn-upgrade" onclick="upgradeWeb()" style="padding:6px 12px;font-size:12px">升级</button>
+      <button class="btn" id="btn-restart" onclick="restartWeb()" style="padding:6px 12px;font-size:12px">重启</button>
       <button class="btn" onclick="shutdownWeb()" style="padding:6px 12px;font-size:12px">关闭服务</button>
     </div>
   </div>
@@ -703,6 +705,61 @@ async function shutdownWeb() {
   }
 }
 
+async function restartWeb() {
+  if (!confirm('重启 Web 服务？端口会短暂中断 1-2 秒。')) return;
+  const btn = document.getElementById('btn-restart');
+  const oldVer = document.getElementById('version-tag').textContent.trim();
+  btn.disabled = true;
+  btn.textContent = '重启中...';
+  try {
+    // 后端响应 202 后会在 500ms 后退出并 spawn 新进程
+    await fetch('/api/web/restart', { method: 'POST' });
+  } catch { /* 旧进程退出途中连接可能 reset，忽略 */ }
+
+  // 轮询 /api/version 等新进程起来；15s 超时（旧进程 server.close + 等 1.5s + 新进程启动）
+  const deadline = Date.now() + 15000;
+  let backOnline = false;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 400));
+    try {
+      const r = await fetch('/api/version', { cache: 'no-store' });
+      if (r.ok) {
+        const d = await r.json();
+        backOnline = true;
+        showToast(`重启成功 v${d.version}`, 'ok');
+        document.getElementById('version-tag').textContent = `v${d.version}`;
+        break;
+      }
+    } catch { /* still down, keep polling */ }
+  }
+  btn.disabled = false;
+  btn.textContent = '重启';
+  if (!backOnline) {
+    showToast('重启失败：10s 内 Web 未恢复，请检查 ~/.ccs/web.log 或手动 ccs web', 'err');
+  }
+}
+
+async function upgradeWeb() {
+  if (!confirm('从 npm 升级到 claude-code-account-switch@latest？\n升级完成后需要点「重启」才能生效。')) return;
+  const btn = document.getElementById('btn-upgrade');
+  btn.disabled = true;
+  btn.textContent = '升级中...';
+  try {
+    const r = await fetch('/api/web/upgrade', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(`升级完成 v${d.version || '?'}。点「重启」生效`, 'ok');
+    } else {
+      const tail = (d.stderr || d.stdout || d.error || '').slice(-300);
+      showToast(`升级失败 (exit=${d.exitCode}): ${tail}`, 'err');
+    }
+  } catch (e) {
+    showToast(`升级请求失败: ${e.message}`, 'err');
+  }
+  btn.disabled = false;
+  btn.textContent = '升级';
+}
+
 async function loadStatuslineStatus() {
   try {
     const r = await fetch('/api/statusline/status');
@@ -717,9 +774,13 @@ function renderStatuslineStatus(s) {
   const installBtn = document.getElementById('statusline-install-btn');
   const uninstallBtn = document.getElementById('statusline-uninstall-btn');
   if (s.installed) {
-    el.innerHTML = '<span style="color:var(--green);font-weight:600">● 已安装</span> ' +
+    let html = '<span style="color:var(--green);font-weight:600">● 已安装</span> ' +
       '<span style="color:var(--text-dim)">脚本：' + esc(s.targetPath) + '</span>';
-    installBtn.textContent = '重新安装（更新脚本）';
+    if (s.stale) {
+      html += '<br><span style="color:#f59e0b;font-weight:600;font-size:12px">⚠ 脚本已过期，点「重新安装」更新到当前 ccs 版本</span>';
+    }
+    el.innerHTML = html;
+    installBtn.textContent = s.stale ? '更新脚本' : '重新安装（更新脚本）';
     uninstallBtn.style.display = '';
   } else if (s.targetExists && !s.hookInstalled) {
     el.innerHTML = '<span style="color:#f59e0b;font-weight:600">⚠ 脚本已复制但 hook 未配置</span>';
@@ -792,7 +853,13 @@ function renderMonitorStatus(s) {
   cb.checked = !!s.enabled;
 
   if (s.running) {
-    badge.innerHTML = '<span style="color:var(--green);font-weight:600">● 运行中</span>';
+    let badgeHtml = '<span style="color:var(--green);font-weight:600">● 运行中</span>';
+    if (s.pyHelpersStale) {
+      const reason = s.pyFilesStale ? '脚本与源码不一致' :
+                     s.pyProcessStale ? '脚本已更新但守护未重启加载' : '过期';
+      badgeHtml += '<span style="color:#f59e0b;font-weight:600;font-size:12px;margin-left:8px">⚠ ' + reason + '，关一下开关再打开</span>';
+    }
+    badge.innerHTML = badgeHtml;
     detail.style.display = 'flex';
     pidEl.textContent  = s.pid ?? '—';
     upEl.textContent   = _formatUptime(s.uptimeSeconds);

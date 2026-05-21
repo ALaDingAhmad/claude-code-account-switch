@@ -246,6 +246,22 @@ function clearWebPid() {
   try { if (fs.existsSync(WEB_PID_PATH)) fs.unlinkSync(WEB_PID_PATH); } catch { /* ignore */ }
 }
 
+// v3.11.0：用于检测"已安装的脚本和源码不一致"（升级 ccs 后用户没重装的情况）。
+// transformSrc 可选——把源码内容做预处理后再比对（状态栏脚本要先替换 __CCS_VERSION__）。
+// 任一文件读失败、源码不存在、内容不等都返 true（即 stale），保守倾向"提示用户重装"。
+function isInstalledStale(srcPath, dstPath, transformSrc) {
+  try {
+    if (!fs.existsSync(srcPath)) return false;  // 源码都没有，谈不上 stale
+    if (!fs.existsSync(dstPath)) return true;   // 装的根本没有 → 需要装
+    let srcContent = fs.readFileSync(srcPath, 'utf8');
+    if (typeof transformSrc === 'function') srcContent = transformSrc(srcContent);
+    const dstContent = fs.readFileSync(dstPath, 'utf8');
+    return srcContent !== dstContent;
+  } catch {
+    return true;  // 读失败也算 stale，让用户重装走一遍
+  }
+}
+
 function findClaudeExe() {
   try {
     const out = execSync('where claude', { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
@@ -284,6 +300,7 @@ module.exports = {
   liveCredentialsExist,
   IS_MAC,
   findClaudeExe,
+  isInstalledStale,
   writeWebPid,
   readWebPid,
   clearWebPid,

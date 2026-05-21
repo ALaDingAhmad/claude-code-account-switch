@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { CLAUDE_DIR, CCS_DIR, fileExists, ensureDir } = require('./utils');
+const { CLAUDE_DIR, CCS_DIR, fileExists, ensureDir, isInstalledStale } = require('./utils');
 
 const PID_FILE      = path.join(CCS_DIR, 'usage-monitor.pid');
 const DISABLED_FILE = path.join(CCS_DIR, 'usage-monitor.disabled');
@@ -96,7 +96,31 @@ function getStatus() {
 
   const recentLogs = _readRecentLogs(30);
 
-  return { enabled, running, pid: running ? pid : null, uptimeSeconds, recentLogs };
+  // v3.11.0：检测两种"过期"——
+  //   filesStale: 源码和已安装文件内容不一致（升级 ccs 后没重装）
+  //   processStale: 已安装文件比守护启动时间还新（py 文件已更新但进程没重启加载）
+  // 任一为真，前端就提示用户关-开守护开关刷新。
+  const filesStale = PY_HELPERS.some((name) => isInstalledStale(
+    path.join(SCRIPTS_DIR, name),
+    path.join(CLAUDE_DIR, name)
+  ));
+  let processStale = false;
+  if (running) {
+    try {
+      const pidMtime = fs.statSync(PID_FILE).mtimeMs;  // 守护启动时间近似
+      processStale = PY_HELPERS.some((name) => {
+        const p = path.join(CLAUDE_DIR, name);
+        if (!fileExists(p)) return false;
+        return fs.statSync(p).mtimeMs > pidMtime + 1000;  // 1s 容差
+      });
+    } catch { /* ignore */ }
+  }
+  const pyHelpersStale = filesStale || processStale;
+
+  return {
+    enabled, running, pid: running ? pid : null, uptimeSeconds, recentLogs,
+    pyHelpersStale, pyFilesStale: filesStale, pyProcessStale: processStale,
+  };
 }
 
 function _tryAutostart(action) {
