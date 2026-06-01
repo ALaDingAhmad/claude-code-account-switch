@@ -294,7 +294,16 @@ class AccountStore {
     const statePath = stateSnapshotPath(n);
     const stateSnap = fileExists(statePath) ? readJson(statePath) : null;
 
-    writeLiveCredentials(snapshot);
+    // v3.12.0：写入 live 时强制 expiresAt 已过期，逼 Claude Code 进程走 refresh 流程
+    // 拿到新 access_token 并刷新内存里的 memoize 缓存。否则进程会继续用旧号 token 直到
+    // 401 才发现已切号，期间每条用户消息可能被重试多次，token 异常消耗。
+    // snapshot 文件保持原样（未污染），refresh 后 Claude Code 写回的新凭证会由
+    // _syncActiveSnapshot 在下次切换前同步回 snapshot。
+    const liveCreds = JSON.parse(JSON.stringify(snapshot));
+    if (liveCreds.claudeAiOauth) {
+      liveCreds.claudeAiOauth.expiresAt = Date.now() - 1000;
+    }
+    writeLiveCredentials(liveCreds);
     if (stateSnap) this._restoreStateFields(stateSnap);
 
     // 切换到 oauth 时清除 settings.json 里的 apikey env

@@ -175,6 +175,7 @@ ccs monitor disable         # 停止并移除自启
 
 ## 版本变更
 
+- **v3.12.0**：切号无需重启 Claude Code。OAuth 切号时写入 live credentials 的 `expiresAt` 强制为已过期，逼 Claude Code 进程下一次请求前走 refresh 流程并清掉内存里 memoize 的旧 token 缓存（机制来自 Claude Code 源码 `utils/auth.ts:invalidateOAuthCacheIfDiskChanged`）。修复"同一 Claude Code 窗口切号后用量跳着涨、必须退出重开才正常"的痛点。snapshot 文件不受污染——CCS 自己的快照保留原始 `expiresAt`，下次切回这个号继续可用。
 - **v3.11.2**：守护重写 + 写表语义澄清。
   - 守护主循环按 `doc/守护进程行为规则.md` 重写：删除 `_idle_recheck_loop` / `STARTUP_GRACE` 等过度设计；用户离开时不发请求但每 5s 检查心跳（之前 5min，导致用户回来感知慢）
   - `account-usage.json` 表语义改为"切换流水账"：唯一写入时机是 `store.switchAccount` 触发——切换前把被切走的当前号 5h 数据（从共享缓存读）落表。Web UI 看到的就是切换那一刻的快照
