@@ -527,7 +527,11 @@ function render(data) {
           (isApiKey
             ? '<span class="badge badge-purple">API Key</span>'
             : (a.subscriptionType ? '<span class="badge badge-purple">' + esc(a.subscriptionType) + '</span>' : '')) +
-          (needsLogin ? '<span class="badge badge-red">未登录</span>' : '') +
+          (!isApiKey && !isActive
+            ? (needsLogin
+                ? '<span class="badge badge-red">未登录</span>'
+                : '<span class="badge badge-green">可用</span>')
+            : '') +
         '</div>' +
         '<div class="acct-meta">' +
           (isApiKey
