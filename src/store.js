@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const {
   CCS_DIR,
   CONFIG_PATH,
@@ -28,6 +29,53 @@ const {
 const USAGE_TABLE_PATH = path.join(CCS_DIR, 'account-usage.json');
 const SHARED_CACHE_PATH = path.join(CCS_DIR, 'usage-shared-cache.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+const QUERY_PROFILE_SCRIPT = path.join(__dirname, '..', 'scripts', 'query_profile.py');
+
+// 异步查 profile API 拿真实订阅状态（pro/free 等），结果写回 config.json 的 livePlan。
+// 由 switchAccount 触发：旧 active + 新 active 都查，让守护下次轮询能跳过已降级的号。
+// 任何失败静默——最坏情况是 livePlan 没更新，UI 沿用旧值。
+function _refreshLivePlanInBackground(name) {
+  try {
+    if (!name) return;
+    const snapPath = credentialsSnapshotPath(name);
+    if (!fileExists(snapPath)) return;
+    const snap = readJson(snapPath);
+    const oauth = extractOauth(snap);
+    if (!oauth || !oauth.accessToken) return;
+
+    const py = spawn('python3', [QUERY_PROFILE_SCRIPT], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let out = '';
+    let err = '';
+    py.stdout.on('data', (b) => { out += b.toString(); });
+    py.stderr.on('data', (b) => { err += b.toString(); });
+    py.on('error', (e) => console.log(`[livePlan] spawn error ${name}:`, e.message));
+    py.on('close', () => {
+      try {
+        const r = JSON.parse(out.trim().split('\n').pop() || '{}');
+        if (!r.ok) {
+          console.log(`[livePlan] ${name} query failed: ${r.error || 'unknown'}`);
+          return;
+        }
+        // 新建实例写回——避免引用调用方那个 store（可能已被改/已 GC）
+        const s = new AccountStore();
+        s.setLivePlan(name, {
+          organizationType: r.organizationType,
+          isFree: r.isFree,
+        });
+        console.log(`[livePlan] ${name} -> ${r.organizationType} (isFree=${r.isFree})`);
+      } catch (e) {
+        console.log(`[livePlan] ${name} parse error:`, e.message, '| stderr:', err.slice(0, 100));
+      }
+    });
+    py.stdin.write(oauth.accessToken);
+    py.stdin.end();
+  } catch (e) {
+    console.log(`[livePlan] ${name} unexpected error:`, e.message);
+  }
+}
 
 // v3.11.2：切换前把"被切走的当前号"的 5h 用量数据写进 account-usage.json。
 // 数据来源：共享缓存（状态栏/守护刚查过的最新结果）。这是表里唯一的"active 写入时机"——
@@ -279,6 +327,12 @@ class AccountStore {
     this._config.activeAccount = n;
     this._config.lastSwitchedAt = new Date().toISOString();
     this._save();
+
+    // 异步刷新 livePlan：旧 active（可能刚降级到 free，让守护下次轮询能跳过）+
+    // 新 active（拿真实订阅等级显示）。OAuth 才查；不阻塞返回；失败静默。
+    if (prevActive && prevActive !== n) _refreshLivePlanInBackground(prevActive);
+    if (acct.type === 'oauth') _refreshLivePlanInBackground(n);
+
     return this._entry(n, this._config.accounts[n]);
   }
 

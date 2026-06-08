@@ -1,58 +1,12 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const AccountStore = require('./store');
-const {
-  triggerCacheInvalidation, writeWebPid, readWebPid, clearWebPid,
-  credentialsSnapshotPath, readJson, fileExists, extractOauth,
-} = require('./utils');
+const { triggerCacheInvalidation, writeWebPid, readWebPid, clearWebPid } = require('./utils');
 const share = require('./share');
 const statusline = require('./statusline');
 const monitor = require('./monitor');
-
-// 异步查 profile：spawn scripts/query_profile.py，结果写回 store。
-// 切换 API 用，不阻塞响应。任何失败静默丢弃（最坏情况 UI 沿用旧 livePlan）。
-function refreshLivePlanInBackground(name) {
-  try {
-    const snapPath = credentialsSnapshotPath(name);
-    if (!fileExists(snapPath)) return;
-    const oauth = extractOauth(readJson(snapPath));
-    if (!oauth || !oauth.accessToken) return;
-
-    const scriptPath = path.join(__dirname, '..', 'scripts', 'query_profile.py');
-    const py = spawn('python3', [scriptPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    let out = '';
-    let err = '';
-    py.stdout.on('data', (b) => { out += b.toString(); });
-    py.stderr.on('data', (b) => { err += b.toString(); });
-    py.on('error', (e) => console.log(`[livePlan] spawn error ${name}:`, e.message));
-    py.on('close', () => {
-      try {
-        const r = JSON.parse(out.trim().split('\n').pop() || '{}');
-        if (!r.ok) {
-          console.log(`[livePlan] ${name} query failed: ${r.error || 'unknown'}`);
-          return;
-        }
-        const store = new AccountStore();
-        store.setLivePlan(name, {
-          organizationType: r.organizationType,
-          isFree: r.isFree,
-        });
-        console.log(`[livePlan] ${name} -> ${r.organizationType} (isFree=${r.isFree})`);
-      } catch (e) {
-        console.log(`[livePlan] ${name} parse error:`, e.message, '|stderr:', err.slice(0, 100));
-      }
-    });
-    py.stdin.write(oauth.accessToken);
-    py.stdin.end();
-  } catch (e) {
-    console.log(`[livePlan] ${name} unexpected error:`, e.message);
-  }
-}
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -490,18 +444,13 @@ function startWebServer(port, openBrowser, onReady) {
         if (!name) throw new Error('name is required');
 
         const store = new AccountStore();
-        const prevActive = store.getStatus().activeAccount;
         store.switchAccount(name);
 
         triggerCacheInvalidation()
           .then((ok) => console.log(`[switch] ${name} cache-invalidate=${ok}`))
           .catch((e) => console.log(`[switch] ${name} cache-invalidate error:`, e.message));
 
-        // 异步刷新两端真实订阅状态（pro/free）：被切走的旧 active 可能刚降级到 free，
-        // 切到的新 active 也可能不是预期等级。结果写回 config，下次 listAccounts 自然带出。
-        // 不 await——不阻塞切换响应，~30s 内前端轮询会看到。
-        if (prevActive && prevActive !== name) refreshLivePlanInBackground(prevActive);
-        refreshLivePlanInBackground(name);
+        // livePlan 刷新已下沉到 store.switchAccount，覆盖 web/CLI/守护三条路径。
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, message: `Switched to "${name}"` }));

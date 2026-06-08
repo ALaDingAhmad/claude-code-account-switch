@@ -37,7 +37,7 @@ def main():
     try:
         code, body, _ = request_anthropic(
             'https://api.anthropic.com/api/oauth/profile',
-            token, timeout=8, caller='web-switch', allow_cache=True)
+            token, timeout=8, caller='switch-livePlan', allow_cache=True)
     except Exception as e:
         print(json.dumps({'ok': False, 'error': f'request: {e}'}))
         return

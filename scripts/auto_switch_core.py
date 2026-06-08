@@ -211,13 +211,35 @@ def decide_and_switch(cur_5h_val, cur_reset, force_switch=False, active_got_429=
             return {'switched': False, 'target': None, 'reason': 'active 429 no history'}
 
     # 触发判定
-    if not force_switch:
+    # 优先看 active 是否已被降级到 free：如是，绕过 5h 阈值强制切换。
+    # livePlan 由 store.switchAccount() 每次切换时刷新（web/CLI/守护三条路径都覆盖），
+    # 所以这里读到的 isFree=True 意味着上一次切换后 profile API 返回了 free。
+    active_acct = accounts.get(cur) or {}
+    active_live = active_acct.get('livePlan') or {}
+    active_is_free = active_live.get('isFree') is True
+    if active_is_free:
+        log(f'active {cur} is free (livePlan), force-switch regardless of 5h={cur_5h_val}%')
+    elif not force_switch:
         if cur_5h_val is None or cur_5h_val < THRESHOLD:
             return {'switched': False, 'target': None, 'reason': 'below threshold'}
 
-    # 评估候选
-    candidates = [(n, a) for n, a in accounts.items()
-                  if n != cur and (a.get('type') or 'oauth') == 'oauth']
+    # 评估候选：排除 active、非 OAuth、已确认是 free 的号。
+    # isFree=True 表示该号已被降级（Claude Code 用不了），不能进候选池。
+    # livePlan 不存在视为未知，保留——让从没切换过的新 pro 号也有机会被选中。
+    skipped_free = []
+    candidates = []
+    for n, a in accounts.items():
+        if n == cur:
+            continue
+        if (a.get('type') or 'oauth') != 'oauth':
+            continue
+        lp = a.get('livePlan') or {}
+        if lp.get('isFree') is True:
+            skipped_free.append(n)
+            continue
+        candidates.append((n, a))
+    if skipped_free:
+        log(f'skip free candidates: {",".join(skipped_free)}')
     if not candidates:
         log(f'5h={cur_5h_val}%, no OAuth candidates to switch to')
         return {'switched': False, 'target': None, 'reason': 'no candidates'}
