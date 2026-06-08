@@ -517,6 +517,8 @@ function render(data) {
     const a = accounts[name];
     const isActive = name === activeAccount;
     const isApiKey = a.type === 'apikey';
+    const needsLogin = !isApiKey && a.loggable === false;
+    const expiryText = needsLogin ? '未登录' : (a.expiresIn || 'unknown');
     return '<div class="account-item' + (isActive ? ' is-active' : '') + '">' +
       '<div class="avatar' + (isActive ? ' avatar-active' : '') + '">' + esc(name[0].toUpperCase()) + '</div>' +
       '<div class="acct-info">' +
@@ -525,20 +527,22 @@ function render(data) {
           (isApiKey
             ? '<span class="badge badge-purple">API Key</span>'
             : (a.subscriptionType ? '<span class="badge badge-purple">' + esc(a.subscriptionType) + '</span>' : '')) +
+          (needsLogin ? '<span class="badge badge-red">未登录</span>' : '') +
         '</div>' +
         '<div class="acct-meta">' +
           (isApiKey
             ? '<span>' + esc(a.authTokenMasked || '') + '</span>' +
               (a.baseUrl ? '<span>' + esc(a.baseUrl) + '</span>' : '')
             : (a.emailAddress ? '<span>' + esc(a.emailAddress) + '</span>' : '') +
-              '<span>' + esc(a.expiresIn || 'unknown') + '</span>') +
+              '<span>' + esc(expiryText) + '</span>') +
           (isApiKey ? '' : _formatUsageMeta(usage[name])) +
         '</div>' +
       '</div>' +
       '<div class="acct-actions">' +
         (isActive
           ? '<button class="btn btn-sm btn-current" disabled>使用中</button>'
-          : '<button class="btn btn-sm btn-outline switch-btn" data-name="' + esc(name) + '">切换</button>') +
+          : '<button class="btn btn-sm btn-outline switch-btn" data-name="' + esc(name) + '"' +
+            (needsLogin ? ' data-needs-login="1"' : '') + '>切换</button>') +
         '<button class="btn btn-sm btn-ghost edit-btn" data-name="' + esc(name) + '">编辑</button>' +
         '<button class="btn btn-sm btn-danger remove-btn" data-name="' + esc(name) + '">删除</button>' +
       '</div>' +
@@ -546,7 +550,13 @@ function render(data) {
   }).join('');
 
   document.querySelectorAll('.switch-btn').forEach(btn => {
-    btn.addEventListener('click', () => doSwitch(btn.dataset.name));
+    btn.addEventListener('click', () => {
+      if (btn.dataset.needsLogin === '1') {
+        showToast('"' + btn.dataset.name + '" 未登录，无法切换。请在 Claude Code 中重新登录该账号后，回到这里重新导入。', 'err');
+        return;
+      }
+      doSwitch(btn.dataset.name);
+    });
   });
   document.querySelectorAll('.remove-btn').forEach(btn => {
     btn.addEventListener('click', () => doRemove(btn.dataset.name));

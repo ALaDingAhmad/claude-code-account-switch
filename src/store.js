@@ -480,9 +480,28 @@ class AccountStore {
         entry.subscriptionType = liveOauth.subscriptionType || entry.subscriptionType;
         entry.accessTokenMasked = maskToken(liveOauth.accessToken);
       }
+      // loggable：能否切到该账号。OAuth 需要快照存在且含完整 access+refresh token；
+      // 活跃 OAuth 账号若 live credentials 有效也算 loggable（即便快照尚未回写）。
+      let loggable = true;
+      if (raw.type === 'oauth') {
+        loggable = false;
+        if (isActive && liveOauth && liveOauth.accessToken && liveOauth.refreshToken) {
+          loggable = true;
+        } else {
+          const snapPath = credentialsSnapshotPath(n);
+          if (fileExists(snapPath)) {
+            try {
+              const snap = readJson(snapPath);
+              const o = extractOauth(snap);
+              if (o && o.accessToken && o.refreshToken) loggable = true;
+            } catch { /* ignore: 损坏快照视为不可切 */ }
+          }
+        }
+      }
       result[n] = {
         ...entry,
         isActive,
+        loggable,
         expiresIn: raw.type === 'apikey' ? null : formatExpiry(entry.expiresAt),
       };
     }
