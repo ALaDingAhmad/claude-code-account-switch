@@ -457,7 +457,10 @@ function esc(s) {
 // 由守护和切换核心维护——可能陈旧，但能让用户看到哪个号最早能恢复。
 function _formatUsageMeta(u) {
   if (!u) return '';
-  const fh = (u.five_hour != null) ? Math.round(u.five_hour) + '%' : '—';
+  const fhVal = (u.five_hour != null) ? Math.round(u.five_hour) : null;
+  const fh = (fhVal != null) ? fhVal + '%' : '—';
+  // 100% 标红：用量打满意味着 Claude Code 当前不可用，跟"免费版/未登录"同级风险
+  const fhStyle = (fhVal != null && fhVal >= 100) ? ' style="color:var(--red);font-weight:600"' : '';
   let resetStr = '—';
   if (u.resets_at) {
     try {
@@ -467,7 +470,7 @@ function _formatUsageMeta(u) {
       }
     } catch { /* keep — */ }
   }
-  return '<span>5h: ' + fh + '</span><span>重置: ' + esc(resetStr) + '</span>';
+  return '<span' + fhStyle + '>5h: ' + fh + '</span><span>重置: ' + esc(resetStr) + '</span>';
 }
 
 function render(data) {
