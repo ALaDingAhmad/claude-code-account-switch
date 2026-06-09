@@ -1,12 +1,48 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 const AccountStore = require('./store');
-const { triggerCacheInvalidation, writeWebPid, readWebPid, clearWebPid } = require('./utils');
+const {
+  triggerCacheInvalidation, writeWebPid, readWebPid, clearWebPid,
+  credentialsSnapshotPath, readJson, fileExists, extractOauth,
+} = require('./utils');
 const share = require('./share');
 const statusline = require('./statusline');
 const monitor = require('./monitor');
+
+// 用活跃账号在共享缓存里的最新 usage 覆盖 usageTable 对应行。
+// account-usage.json 是"切换流水账"，只在被切走那一瞬间写入；活跃号留下的是上一次
+// 被切走时的快照，过 reset 后已陈旧。共享缓存（守护/状态栏每 100s 维护）才是
+// 活跃号 5h 的真实当下值——按 token MD5 前 8 位作 key 跟 anthropic_http.py 对齐。
+function _patchActiveUsage(usageTable, activeAccount) {
+  if (!activeAccount) return;
+  try {
+    const snapPath = credentialsSnapshotPath(activeAccount);
+    if (!fileExists(snapPath)) return;
+    const oauth = extractOauth(readJson(snapPath));
+    if (!oauth || !oauth.accessToken) return;
+
+    const cachePath = path.join(require('os').homedir(), '.ccs', 'usage-shared-cache.json');
+    if (!fileExists(cachePath)) return;
+    const cache = readJson(cachePath);
+
+    const th = crypto.createHash('md5').update(oauth.accessToken).digest('hex').slice(0, 8);
+    const entry = cache[`${th}:https://api.anthropic.com/api/oauth/usage`];
+    if (!entry || !entry.body_hex) return;
+
+    const body = JSON.parse(Buffer.from(entry.body_hex, 'hex').toString('utf8'));
+    const fh = body.five_hour || {};
+    if (fh.utilization == null) return;
+
+    usageTable[activeAccount] = {
+      five_hour: fh.utilization,
+      resets_at: fh.resets_at || '',
+      checked_at: new Date((entry.ts || 0) * 1000).toISOString(),
+    };
+  } catch { /* 静默：拿不到就保留原 usageTable 那行 */ }
+}
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -88,6 +124,19 @@ function startWebServer(port, openBrowser, onReady) {
             usageTable = JSON.parse(fs.readFileSync(usagePath, 'utf8')) || {};
           }
         } catch { /* ignore */ }
+        // 活跃账号那行用共享缓存里的实时值覆盖（流水账里是上次被切走的旧快照）
+        _patchActiveUsage(usageTable, status.activeAccount);
+        // 过 reset 时间的行就地归零——usageTable 是快照，不会自己衰减，
+        // 不归零的话前端会看到陈旧的 100% 误以为限额未恢复。
+        const nowMs = Date.now();
+        for (const k of Object.keys(usageTable)) {
+          const u = usageTable[k];
+          if (!u || !u.resets_at) continue;
+          const t = Date.parse(u.resets_at);
+          if (!isNaN(t) && t <= nowMs) {
+            usageTable[k] = { ...u, five_hour: 0 };
+          }
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, ...status, accounts, usageTable }));
       } catch (e) {
