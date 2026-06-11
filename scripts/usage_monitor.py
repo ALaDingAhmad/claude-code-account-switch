@@ -245,6 +245,12 @@ def _decide_and_act(five_hour, resets_at, src):
     写表 active 数据：不在这里写。account-usage.json 是"切换流水账"——
     由 store.switchAccount 在切换执行前用 JS 写。守护职责是看数读决策，不管写表。
     """
+    if five_hour >= SWITCH_THRESHOLD and resets_at:
+        reset_dt = _parse_iso(resets_at)
+        if reset_dt and reset_dt <= datetime.now(timezone.utc):
+            log(f'monitor: 5h={five_hour}% but resets_at {resets_at[:19]} already past ({src}), stale data → re-query')
+            return ('stale', None)
+
     if five_hour < SWITCH_THRESHOLD:
         return ('continue', None)
 
@@ -272,6 +278,7 @@ def main():
 
     start_time = time.time()
     last_idle_log = 0.0
+    force_fresh = False  # 长睡醒来后强制跳过缓存查一次真实数据
 
     while True:
         # 超时保护 / 关闭开关
@@ -294,14 +301,15 @@ def main():
 
         last_idle_log = 0.0  # 用户回来重置心跳日志计时
 
-        # —— 用户活跃：优先读缓存 ——
+        # —— 用户活跃：优先读缓存（长睡醒来后跳过一次） ——
         token = _active_token()
         fh, reset, age, ok = _read_cached_usage(token)
-        cache_fresh = ok and age is not None and age < CACHE_MAX_AGE
+        cache_fresh = ok and age is not None and age < CACHE_MAX_AGE and not force_fresh
 
         if cache_fresh:
             src = f'cache age={int(age)}s'
         else:
+            force_fresh = False
             # 缓存不新鲜或没数据 → 守护自己发一次
             fh, reset = _query_active_usage()
             if fh is None:
@@ -316,9 +324,13 @@ def main():
         action, payload = _decide_and_act(fh, reset, src)
         if action == 'break':
             break
+        if action == 'stale':
+            force_fresh = True
+            continue
         if action == 'switch_done_long_sleep':
             if _sleep_until_reset(payload):
                 break
+            force_fresh = True
             continue
         # continue / switch_done 都是短睡继续盯
         if _sleep_responsive(CACHE_TICK):

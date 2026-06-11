@@ -71,9 +71,9 @@ def read_account_token(name):
 def query_usage_for_token(token):
     """调 /api/oauth/usage 查一个 token 的当前用量。
     返回:
-      ('ok', five_hour:float, resets_at:str)  - 200 OK
-      ('exhausted', None, None)               - 真 429（响应头带 anthropic-organization-id，后端确认用尽）
-      ('error', None, None)                   - 其他错误（网络、5xx、Cloudflare 边缘 429、token 无效等）
+      ('ok', five_hour:float, resets_at:str)      - 200 OK
+      ('exhausted', None, None)                    - 真 429（响应头带 anthropic-organization-id，后端确认用尽）
+      ('error', http_code:int|None, None)          - 其他错误；http_code 供调用方区分 401 等场景
     Cloudflare 边缘 429 不算用尽，归到 'error'，避免被乒乓 bug 误伤为"该号已用尽"。
     """
     try:
@@ -93,12 +93,12 @@ def query_usage_for_token(token):
             return ('ok', float(fh.get('utilization') or 0.0), (fh.get('resets_at') or ''))
         except Exception as e:
             log(f'parse usage response failed: {e}')
-            return ('error', None, None)
+            return ('error', code, None)
     if code == 429:
         if is_real_anthropic_429(headers):
             return ('exhausted', None, None)
-        return ('error', None, None)
-    return ('error', None, None)
+        return ('error', code, None)
+    return ('error', code, None)
 
 
 def query_active_usage():
@@ -259,15 +259,15 @@ def decide_and_switch(cur_5h_val, cur_reset, force_switch=False, active_got_429=
             log(f'{name}: no token snapshot, mark unknown')
             evaluated.append((name, 'unknown', None, ''))
             continue
-        kind, five_hour, resets_at = query_usage_for_token(tok)
+        kind, val2, resets_at = query_usage_for_token(tok)
         if kind == 'ok':
             table[name] = {
-                'five_hour': five_hour,
+                'five_hour': val2,
                 'resets_at': resets_at,
                 'checked_at': now_iso,
             }
             save_usage(table)
-            evaluated.append((name, 'known', five_hour, resets_at))
+            evaluated.append((name, 'known', val2, resets_at))
         elif kind == 'exhausted':
             # 429：按业务约定=用尽。沿用旧 future reset；没有就只能 unknown
             table, written = mark_exhausted(name, table)
@@ -277,8 +277,13 @@ def decide_and_switch(cur_5h_val, cur_reset, force_switch=False, active_got_429=
             else:
                 log(f'{name}: candidate 429 but no historical reset, mark unknown')
                 evaluated.append((name, 'unknown', None, ''))
+        elif val2 == 401 and info and reset_dt and reset_dt <= now:
+            # v3.12.7 假 401：token 过期但 resets_at 已过 → 上个 5h 窗口已 reset，号可用。
+            # 切过去后 v3.12.0 expiresAt 机制会逼 Claude Code refresh token。
+            log(f'{name}: 401 + resets_at {info.get("resets_at","")} already past, treating as available')
+            evaluated.append((name, 'known', 0.0, info.get('resets_at') or ''))
         else:
-            log(f'{name}: usage query failed, mark unknown')
+            log(f'{name}: usage query failed (http={val2}), mark unknown')
             evaluated.append((name, 'unknown', None, ''))
 
     # 选目标：只切 known<99（删除乐观切 unknown 分支——按用户规则，切到用尽号代价大于等一会）
