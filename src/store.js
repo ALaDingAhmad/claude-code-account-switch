@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 const { spawn } = require('child_process');
 const {
   CCS_DIR,
@@ -30,6 +31,98 @@ const USAGE_TABLE_PATH = path.join(CCS_DIR, 'account-usage.json');
 const SHARED_CACHE_PATH = path.join(CCS_DIR, 'usage-shared-cache.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const QUERY_PROFILE_SCRIPT = path.join(__dirname, '..', 'scripts', 'query_profile.py');
+const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+
+// 切换后主动 refresh token：用 snapshot 里的 refresh_token 调 OAuth endpoint，
+// 拿到新 access_token + refresh_token + 真实 expiresAt，写回 live + snapshot + config。
+// 这样 share sync 拿到的 snapshot 是最新的，不会被对端旧数据覆盖。
+// Claude Code 进程重新加载 live credentials 时发现 token 未过期，不会再竞争 refresh。
+function _refreshTokenAfterSwitch(accountName, { notify = true } = {}) {
+  const live = readLiveCredentials();
+  if (!live) return;
+  const oauth = extractOauth(live);
+  if (!oauth?.refreshToken) return;
+
+  const body = JSON.stringify({
+    grant_type: 'refresh_token',
+    refresh_token: oauth.refreshToken,
+    client_id: OAUTH_CLIENT_ID,
+  });
+
+  const req = https.request(
+    {
+      hostname: 'platform.claude.com',
+      path: '/v1/oauth/token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': 'claude-cli/2.1.39 (external, cli)',
+      },
+      timeout: 15000,
+    },
+    (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            console.log(`[refresh] ${accountName} HTTP ${res.statusCode}`);
+            // refresh 失败也要通知 share sync（用旧 snapshot 总比不通知好）
+            if (notify) {
+              try { require('./share').notifyChange(accountName); } catch { /* */ }
+            }
+            return;
+          }
+          const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const expiresAt = Date.now() + (data.expires_in || 0) * 1000;
+          const newOauth = {
+            ...oauth,
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token || oauth.refreshToken,
+            expiresAt,
+          };
+          if (data.scope) {
+            newOauth.scopes = typeof data.scope === 'string' ? data.scope.split(' ') : data.scope;
+          }
+
+          // 写回 live credentials（真实 expiresAt）
+          const newLive = { ...live, claudeAiOauth: newOauth };
+          writeLiveCredentials(newLive);
+
+          // 立即同步到 snapshot + config（让 share sync 拿到最新 expiresAt）
+          const store = new AccountStore();
+          store._syncActiveSnapshot();
+          store._save();
+
+          console.log(`[refresh] ${accountName} OK, expiresAt=${formatExpiry(expiresAt)}, token=...${newOauth.accessToken.slice(-8)}`);
+
+          // refresh 完成后再通知 share sync
+          if (notify) {
+            try { require('./share').notifyChange(accountName); } catch { /* */ }
+          }
+        } catch (e) {
+          console.log(`[refresh] ${accountName} parse error: ${e.message}`);
+          if (notify) {
+            try { require('./share').notifyChange(accountName); } catch { /* */ }
+          }
+        }
+      });
+    },
+  );
+  req.on('error', (e) => {
+    console.log(`[refresh] ${accountName} network error: ${e.message}`);
+    if (notify) {
+      try { require('./share').notifyChange(accountName); } catch { /* */ }
+    }
+  });
+  req.on('timeout', () => { req.destroy(); });
+  req.write(body);
+  req.end();
+}
 
 // 异步查 profile API 拿真实订阅状态（pro/free 等），结果写回 config.json 的 livePlan。
 // 由 switchAccount 触发：旧 active + 新 active 都查，让守护下次轮询能跳过已降级的号。
@@ -359,7 +452,12 @@ class AccountStore {
     if (prevActive && prevActive !== n) _refreshLivePlanInBackground(prevActive);
     if (acct.type === 'oauth') _refreshLivePlanInBackground(n);
 
-    if (notify) {
+    if (acct.type === 'oauth') {
+      // OAuth：先 refresh 拿到真实 expiresAt 写入 snapshot，再通知 share sync。
+      // 避免 share sync 拿到故意过期的旧 expiresAt，导致对端旧数据反向覆盖。
+      _refreshTokenAfterSwitch(n, { notify });
+    } else if (notify) {
+      // API Key：无需 refresh，直接通知
       try { require('./share').notifyChange(n); } catch { /* share 未启用时静默 */ }
     }
 
