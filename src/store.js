@@ -164,12 +164,12 @@ class AccountStore {
 
   _readLiveState() {
     if (!fileExists(CLAUDE_STATE_PATH)) return {};
-    return readJson(CLAUDE_STATE_PATH);
+    try { return readJson(CLAUDE_STATE_PATH); } catch { return {}; }
   }
 
   _readSettings() {
     if (!fileExists(CLAUDE_SETTINGS_PATH)) return {};
-    return readJson(CLAUDE_SETTINGS_PATH);
+    try { return readJson(CLAUDE_SETTINGS_PATH); } catch { return {}; }
   }
 
   _restoreStateFields(snapshot) {
@@ -197,25 +197,42 @@ class AccountStore {
     const oauth = extractOauth(live);
     if (!oauth || !oauth.accessToken || !oauth.refreshToken) return;
 
-    // 关键：仅当 live 内容与现有快照不同才更新 updatedAt。
-    // 否则 share sync 每次轮询都会无差别刷新 updatedAt，破坏"内容版本号"语义，
-    // 导致 hash 不同的两端因 updatedAt 落在容差内而被判定为"无差异"跳过同步。
+    // v3.12.0 switchOauth 写 live 时故意把 expiresAt 设为 Date.now()-1000
+    // 逼 Claude Code refresh。在 Claude Code 完成 refresh 之前如果走到这里，
+    // live 里的 expiresAt 是假的过期值、token 和 snapshot 一样。
+    // 如果原样写回 snapshot，会污染 snapshot 的 expiresAt → hash 变化 →
+    // share sync 方向判断用降级后的 expiresAt → 方向反转 → 不同步。
+    // 修复：写 snapshot 前把假 expiresAt 还原为 config 里的真值。
+    const snapData = JSON.parse(JSON.stringify(live));
+    const liveExp = snapData.claudeAiOauth?.expiresAt;
+    if (snapData.claudeAiOauth && cur.expiresAt
+        && snapData.claudeAiOauth.expiresAt < cur.expiresAt) {
+      snapData.claudeAiOauth.expiresAt = cur.expiresAt;
+      console.log(`[store] _syncActiveSnapshot "${active}": live expiresAt=${liveExp} < config=${cur.expiresAt}, restored to config value (v3.12.0 fake expiry)`);
+    }
+
     const snapPath = credentialsSnapshotPath(active);
-    const newContent = JSON.stringify(live);
+    const newContent = JSON.stringify(snapData);
     const oldContent = fileExists(snapPath)
       ? (() => { try { return fs.readFileSync(snapPath, 'utf8'); } catch { return ''; } })()
       : '';
-    const contentChanged = newContent !== oldContent;
-    if (!contentChanged) return;  // 内容相同，跳过整个写入和元数据更新
+    if (newContent === oldContent) {
+      console.log(`[store] _syncActiveSnapshot "${active}": snapshot unchanged, skip`);
+      return false;
+    }
 
-    atomicWriteJson(snapPath, live);
+    atomicWriteJson(snapPath, snapData);
     const liveState = this._readLiveState();
     atomicWriteJson(stateSnapshotPath(active), {
       userID: liveState.userID || null,
       oauthAccount: liveState.oauthAccount || null,
     });
 
-    cur.expiresAt = oauth.expiresAt || cur.expiresAt;
+    const snapOauth = extractOauth(snapData);
+    const prevExp = cur.expiresAt;
+    if (snapOauth.expiresAt && (!cur.expiresAt || snapOauth.expiresAt > cur.expiresAt)) {
+      cur.expiresAt = snapOauth.expiresAt;
+    }
     cur.subscriptionType = oauth.subscriptionType || cur.subscriptionType;
     cur.accessTokenMasked = maskToken(oauth.accessToken);
     if (liveState.oauthAccount) {
@@ -226,6 +243,8 @@ class AccountStore {
     }
     if (liveState.userID) cur.userID = liveState.userID;
     cur.updatedAt = new Date().toISOString();
+    console.log(`[store] _syncActiveSnapshot "${active}": snapshot updated, expiresAt ${prevExp||'-'} → ${cur.expiresAt||'-'}, token=${cur.accessTokenMasked}`);
+    return true;
   }
 
   // ── 公开 API ──────────────────────────────────────────────────────────────
@@ -238,7 +257,14 @@ class AccountStore {
   // 导入 OAuth 账号（从当前 live credentials 读取）
   importAccount(name, sourcePath = null) {
     const n = sanitizeName(name);
-    const sourceJson = sourcePath ? readJson(sourcePath) : readLiveCredentials();
+    let sourceJson;
+    if (sourcePath) {
+      try { sourceJson = readJson(sourcePath); } catch (e) {
+        throw new Error(`Cannot read credentials from "${sourcePath}": ${e.message}`);
+      }
+    } else {
+      sourceJson = readLiveCredentials();
+    }
     if (!sourceJson) throw new Error('No live OAuth credentials found');
     const oauth = extractOauth(sourceJson);
     if (!oauth || !oauth.accessToken || !oauth.refreshToken) {
@@ -302,7 +328,7 @@ class AccountStore {
     return this._entry(n, this._config.accounts[n]);
   }
 
-  switchAccount(name) {
+  switchAccount(name, { notify = true } = {}) {
     const n = sanitizeName(name);
     const acct = this._config.accounts[n];
     if (!acct) throw new Error(`Unknown account "${n}"`);
@@ -333,6 +359,10 @@ class AccountStore {
     if (prevActive && prevActive !== n) _refreshLivePlanInBackground(prevActive);
     if (acct.type === 'oauth') _refreshLivePlanInBackground(n);
 
+    if (notify) {
+      try { require('./share').notifyChange(n); } catch { /* share 未启用时静默 */ }
+    }
+
     return this._entry(n, this._config.accounts[n]);
   }
 
@@ -354,14 +384,22 @@ class AccountStore {
   _switchOauth(n, prev) {
     const snapPath = credentialsSnapshotPath(n);
     if (!fileExists(snapPath)) throw new Error(`Snapshot not found for "${n}"`);
-    const snapshot = readJson(snapPath);
+    let snapshot;
+    try {
+      snapshot = readJson(snapPath);
+    } catch (e) {
+      throw new Error(`Snapshot for "${n}" is corrupted (${e.message}). Re-import this account to fix.`);
+    }
     const oauth = extractOauth(snapshot);
     if (!oauth || !oauth.accessToken || !oauth.refreshToken) {
       throw new Error(`Snapshot for "${n}" is invalid`);
     }
 
     const statePath = stateSnapshotPath(n);
-    const stateSnap = fileExists(statePath) ? readJson(statePath) : null;
+    let stateSnap = null;
+    if (fileExists(statePath)) {
+      try { stateSnap = readJson(statePath); } catch { /* corrupted state → treat as absent */ }
+    }
 
     // v3.12.0：写入 live 时强制 expiresAt 已过期，逼 Claude Code 进程走 refresh 流程
     // 拿到新 access_token 并刷新内存里的 memoize 缓存。否则进程会继续用旧号 token 直到
@@ -531,9 +569,9 @@ class AccountStore {
     }
     const live = readLiveCredentials();
     if (!live) return { synced: false, reason: 'no live credentials' };
-    this._syncActiveSnapshot();
+    const changed = this._syncActiveSnapshot();
     this._save();
-    return { synced: true, name: active };
+    return { synced: true, name: active, changed: !!changed };
   }
 
   listAccounts() {

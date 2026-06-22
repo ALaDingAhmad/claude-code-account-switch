@@ -435,7 +435,9 @@ function startWebServer(port, openBrowser, onReady) {
     // --- Share Sync 对端互访接口（必须鉴权）---
     if (url.pathname === '/api/share/snapshot' ||
         url.pathname === '/api/share/account' ||
-        url.pathname === '/api/share/delete') {
+        url.pathname === '/api/share/delete' ||
+        url.pathname === '/api/share/notify' ||
+        url.pathname === '/api/share/register') {
       const cfg = share.getShareConfig();
       if (!cfg?.enabled || !cfg.secret || !share.checkAuth(req, cfg.secret)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -463,7 +465,12 @@ function startWebServer(port, openBrowser, onReady) {
       if (req.method === 'POST' && url.pathname === '/api/share/account') {
         try {
           const body = JSON.parse(await readBody(req));
-          share.applyAccountDetail(body);
+          const r = share.applyAccountDetail(body);
+          // 主节点被 push 了新数据 → 广播给所有从节点
+          const shareCfg = share.getShareConfig();
+          if (!shareCfg?.peerUrl && body.name && r?.applied !== false) {
+            share._broadcastToFollowers(body.name);
+          }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ ok: true }));
         } catch (e) {
@@ -477,6 +484,38 @@ function startWebServer(port, openBrowser, onReady) {
           if (!body.name) throw new Error('name required');
           const store = new AccountStore();
           store.applyDeleteAccount(body.name, body.deletedAt);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      }
+      // 从节点注册：告诉主节点自己的地址，主节点记住用于广播
+      if (req.method === 'POST' && url.pathname === '/api/share/register') {
+        try {
+          const body = JSON.parse(await readBody(req));
+          if (!body.nodeId || !body.url) throw new Error('nodeId and url required');
+          share.registerFollower(body.nodeId, body.url);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true, followers: share.listFollowers().length }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      }
+      // 变更通知：从节点上报变更 → 主节点 apply + 广播；主节点推送 → 从节点 apply
+      if (req.method === 'POST' && url.pathname === '/api/share/notify') {
+        try {
+          const body = JSON.parse(await readBody(req));
+          const { accountName, detail, sourceNodeId } = body;
+          if (!accountName || !detail) throw new Error('accountName and detail required');
+          share.applyAccountDetail(detail);
+          // 主节点收到从节点上报：广播给其他从节点（排除来源）
+          const shareCfg = share.getShareConfig();
+          if (!shareCfg?.peerUrl) {
+            share._broadcastToFollowers(accountName, sourceNodeId);
+          }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ ok: true }));
         } catch (e) {

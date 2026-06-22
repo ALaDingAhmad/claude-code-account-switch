@@ -148,8 +148,11 @@ async function callPeer(peerUrl, path, secret, { method = 'GET', body = null } =
 function refreshFromLive() {
   try {
     const Store = require('./store');
-    new Store().syncActive();
-  } catch { /* ignore */ }
+    const r = new Store().syncActive();
+    if (r.changed) console.log(`[share] refreshFromLive: active="${r.name}" snapshot changed`);
+  } catch (e) {
+    console.log(`[share] refreshFromLive failed: ${e.message}`);
+  }
 }
 
 // ── Account snapshot/detail/apply ───────────────────────────────────────────
@@ -235,8 +238,8 @@ function localAccountDetail(name) {
     organizationName: acct.organizationName,
     accountUuid: acct.accountUuid,
     userID: acct.userID,
-    credentials: fileExists(cp) ? readJson(cp) : null,
-    stateSnapshot: fileExists(sp) ? readJson(sp) : null,
+    credentials: fileExists(cp) ? (() => { try { return readJson(cp); } catch { return null; } })() : null,
+    stateSnapshot: fileExists(sp) ? (() => { try { return readJson(sp); } catch { return null; } })() : null,
   };
 }
 
@@ -247,20 +250,26 @@ function applyAccountDetail(detail) {
   config.accounts = config.accounts || {};
   config.deletedAccounts = config.deletedAccounts || {};
 
+  const prev = config.accounts[name];
+  console.log(`[share] applyAccountDetail "${name}" type=${detail.type||'oauth'} expiresAt=${detail.expiresAt||'-'} prev=${prev ? `expiresAt=${prev.expiresAt||'-'}` : 'new'}`);
+
   // 墓碑保护：若本端已有墓碑，仅当 detail.createdAt > 墓碑 deletedAt 才允许复活
   const tomb = config.deletedAccounts[name];
   const detailCreatedAt = detail.createdAt || detail.importedAt || null;
   if (tomb && tomb.deletedAt) {
     if (!detailCreatedAt || detailCreatedAt <= tomb.deletedAt) {
-      // 本端墓碑更新，拒绝复活——这是"对端推过来的是删除前的旧账号"
+      console.log(`[share] applyAccountDetail "${name}" rejected: tombstone deletedAt=${tomb.deletedAt} >= createdAt=${detailCreatedAt}`);
       return { applied: false, reason: 'tombstone-protected' };
     }
-    // 复活：清掉墓碑
+    console.log(`[share] applyAccountDetail "${name}" reviving: createdAt=${detailCreatedAt} > tombstone deletedAt=${tomb.deletedAt}`);
     delete config.deletedAccounts[name];
   }
 
   const now = new Date().toISOString();
+  let snapshotChanged = false;
   if (detail.type === 'apikey') {
+    const prev = config.accounts[name];
+    snapshotChanged = !prev || prev.authToken !== detail.authToken || prev.baseUrl !== (detail.baseUrl || null);
     config.accounts[name] = {
       type: 'apikey',
       name,
@@ -273,7 +282,11 @@ function applyAccountDetail(detail) {
     };
   } else {
     if (detail.credentials) {
-      atomicWriteJson(credentialsSnapshotPath(name), detail.credentials);
+      const cp = credentialsSnapshotPath(name);
+      const oldCred = fileExists(cp) ? (() => { try { return fs.readFileSync(cp, 'utf8'); } catch { return ''; } })() : '';
+      const newCred = JSON.stringify(detail.credentials, null, 2);
+      if (newCred !== oldCred) snapshotChanged = true;
+      atomicWriteJson(cp, detail.credentials);
     }
     if (detail.stateSnapshot) {
       atomicWriteJson(stateSnapshotPath(name), detail.stateSnapshot);
@@ -297,16 +310,20 @@ function applyAccountDetail(detail) {
   }
   saveConfig(config);
 
-  // 如果被更新的是当前 active 账号，刷新 live（让 OAuth 自动续期/API Key 切换在本端生效）
+  // 如果被更新的是当前 active 账号，刷新 live（让 OAuth 自动续期/API Key 切换在本端生效）。
+  // 但只在快照内容真正变化时才刷新——否则每轮 sync 都无条件 switchAccount 会触发
+  // _refreshLivePlanInBackground，导致每 30s 一次无意义的 profile API 调用。
   const after = readConfig();
-  if (after.activeAccount === name) {
+  if (after.activeAccount === name && snapshotChanged) {
+    console.log(`[share] applyAccountDetail "${name}" is active + snapshot changed → refreshing live`);
     try {
       const Store = require('./store');
-      new Store().switchAccount(name);
+      new Store().switchAccount(name, { notify: false });
     } catch (e) {
-      // 不影响同步主流程，但要 log
-      console.log(`[share] applied ${name} but failed to refresh live: ${e.message}`);
+      console.log(`[share] applied "${name}" but failed to refresh live: ${e.message}`);
     }
+  } else if (after.activeAccount === name) {
+    console.log(`[share] applyAccountDetail "${name}" is active but snapshot unchanged → skip live refresh`);
   }
   return { applied: true };
 }
@@ -319,15 +336,29 @@ async function syncOnce(log = () => {}) {
   if (!cfg.peerUrl) return { skipped: '主节点模式（无 peer URL，不主动同步）' };
   if (!cfg.secret) return { skipped: 'no secret' };
 
+  log(`sync round start, peer=${cfg.peerUrl}`);
+
   let peer;
   try {
     peer = await callPeer(cfg.peerUrl, '/api/share/snapshot', cfg.secret);
   } catch (e) {
     setShareConfig({ lastError: `snapshot: ${e.message}`, lastSyncAt: new Date().toISOString() });
+    log(`sync round failed: cannot fetch peer snapshot: ${e.message}`);
     return { error: e.message };
   }
 
+  // 每轮 sync 顺便续注册（主节点 follower 列表有 1h TTL）
+  _registerSelfToMaster(cfg, () => {});
+
   const local = localSnapshot();
+  // 记录本端和对端快照概要，方便排查方向决策
+  for (const name of new Set([...Object.keys(local.accounts), ...Object.keys(peer.accounts || {})])) {
+    const la = local.accounts[name];
+    const pa = (peer.accounts || {})[name];
+    const lInfo = la ? `type=${la.type||'oauth'} hash=${la.hash} expiresAt=${la.expiresAt||'-'} updatedAt=${la.updatedAt||'-'}` : 'absent';
+    const pInfo = pa ? `type=${pa.type||'oauth'} hash=${pa.hash} expiresAt=${pa.expiresAt||'-'} updatedAt=${pa.updatedAt||'-'}` : 'absent';
+    log(`  account "${name}": local=[${lInfo}] peer=[${pInfo}]`);
+  }
   let pulled = 0;
   let pushed = 0;
   let deletePulled = 0;
@@ -349,34 +380,40 @@ async function syncOnce(log = () => {}) {
     const pd = peerDeleted[name];    // 对端墓碑
     const ld = localDeleted[name];   // 本端墓碑
 
-    // ─── 双方都活着：按内容版本号决策（原有逻辑）─────────────────────────
+    // ─── 双方都活着：按版本号决策 ─────────────────────────────────────────
     if (la && pa) {
-      if (la.hash === pa.hash) continue;
       const isOauth = (la.type || pa.type) === 'oauth' || (!la.type && !pa.type);
       let localVer, peerVer, label;
       if (isOauth) {
+        // OAuth 直接用 expiresAt（token refresh 后单调递增）判方向。
+        // 不依赖 hash：hash 基于 snapshot 文件内容，会被 v3.12.0 故意过期
+        // 的 expiresAt 差异干扰，导致 hash 不同但 token 实际相同。
         localVer = la.expiresAt || 0;
         peerVer = pa.expiresAt || 0;
         label = 'expiresAt';
+        if (localVer === peerVer) continue;
       } else {
+        if (la.hash === pa.hash) continue;
         localVer = new Date(la.updatedAt || 0).getTime();
         peerVer = new Date(pa.updatedAt || 0).getTime();
         label = 'updatedAt';
       }
       const direction = peerVer > localVer ? 'pull' : localVer > peerVer ? 'push' : 'pull';
+      log(`  "${name}" direction=${direction} by ${label}: local=${localVer} peer=${peerVer} diff=${peerVer - localVer}`);
       if (direction === 'pull') {
         try {
           const detail = await callPeer(cfg.peerUrl, `/api/share/account?name=${encodeURIComponent(name)}`, cfg.secret);
           const r = applyAccountDetail(detail);
-          if (r?.applied !== false) { pulled++; log(`pulled "${name}" (peer ${label} bigger by ${peerVer - localVer})`); }
-        } catch (e) { log(`pull "${name}" failed: ${e.message}`); }
+          if (r?.applied !== false) { pulled++; log(`  "${name}" pull applied`); }
+          else { log(`  "${name}" pull rejected: ${r?.reason || 'unknown'}`); }
+        } catch (e) { log(`  "${name}" pull failed: ${e.message}`); }
       } else {
         const detail = localAccountDetail(name);
         try {
           await callPeer(cfg.peerUrl, '/api/share/account', cfg.secret, { method: 'POST', body: detail });
           pushed++;
-          log(`pushed "${name}" (local ${label} bigger by ${localVer - peerVer})`);
-        } catch (e) { log(`push "${name}" failed: ${e.message}`); }
+          log(`  "${name}" push applied`);
+        } catch (e) { log(`  "${name}" push failed: ${e.message}`); }
       }
       continue;
     }
@@ -470,6 +507,7 @@ async function syncOnce(log = () => {}) {
   }
 
   const result = { pulled, pushed, deletePulled, deletePushed };
+  log(`sync round done: pulled=${pulled} pushed=${pushed} deletePulled=${deletePulled} deletePushed=${deletePushed}`);
   setShareConfig({
     lastSyncAt: new Date().toISOString(),
     lastResult: result,
@@ -478,9 +516,83 @@ async function syncOnce(log = () => {}) {
   return result;
 }
 
+// ── Eager notify: 快照变更时主动通知，不等下一轮轮询 ─────────────────────────
+//
+// 从节点变更 → POST /api/share/notify 给主节点 → 主节点广播给所有从节点
+// 主节点变更 → 直接广播给所有从节点
+// 广播 = 把变更账号的 detail POST /api/share/account 到每个从节点
+
+const _followers = new Map();  // nodeId → { url, lastSeen }
+
+function registerFollower(nodeId, url) {
+  if (!nodeId || !url) return;
+  _followers.set(nodeId, { url: url.replace(/\/$/, ''), lastSeen: Date.now() });
+  // 清理 1h 没心跳的
+  const cutoff = Date.now() - 3600_000;
+  for (const [id, f] of _followers) {
+    if (f.lastSeen < cutoff) _followers.delete(id);
+  }
+}
+
+function listFollowers() {
+  return [..._followers.entries()].map(([id, f]) => ({ nodeId: id, ...f }));
+}
+
+function _broadcastToFollowers(accountName, excludeNodeId) {
+  const cfg = getShareConfig();
+  if (!cfg?.enabled || !cfg.secret) return;
+  const detail = localAccountDetail(accountName);
+  if (!detail) return;
+  for (const [nodeId, { url }] of _followers) {
+    if (nodeId === excludeNodeId) continue;
+    callPeer(url, '/api/share/account', cfg.secret, { method: 'POST', body: detail })
+      .then(() => console.log(`[share] broadcast "${accountName}" → ${nodeId.slice(0, 6)} OK`))
+      .catch((e) => console.log(`[share] broadcast "${accountName}" → ${nodeId.slice(0, 6)} failed: ${e.message}`));
+  }
+}
+
+function notifyChange(accountName) {
+  const cfg = getShareConfig();
+  if (!cfg?.enabled || !cfg.secret) return;
+  if (!accountName) {
+    const config = readConfig();
+    accountName = config.activeAccount;
+  }
+  if (!accountName) return;
+
+  if (!cfg.peerUrl) {
+    // 主节点：直接广播给所有从节点
+    _broadcastToFollowers(accountName);
+  } else {
+    // 从节点：通知主节点，由主节点广播
+    const detail = localAccountDetail(accountName);
+    if (!detail) return;
+    callPeer(cfg.peerUrl, '/api/share/notify', cfg.secret, {
+      method: 'POST',
+      body: { accountName, detail, sourceNodeId: getNodeId() },
+    })
+      .then(() => console.log(`[share] notify master "${accountName}" OK`))
+      .catch((e) => console.log(`[share] notify master "${accountName}" failed: ${e.message}`));
+  }
+}
+
 // ── Daemon timer ────────────────────────────────────────────────────────────
 
 let timer = null;
+
+function _registerSelfToMaster(cfg, log) {
+  const { readWebPid } = require('./utils');
+  const info = readWebPid();
+  if (!info) return;
+  const bindAddr = info.bind === '0.0.0.0' ? '127.0.0.1' : (info.bind || '127.0.0.1');
+  const selfUrl = `http://${bindAddr}:${info.port}`;
+  callPeer(cfg.peerUrl, '/api/share/register', cfg.secret, {
+    method: 'POST',
+    body: { nodeId: getNodeId(), url: selfUrl },
+  })
+    .then(() => log(`[share] registered to master as ${selfUrl}`))
+    .catch((e) => log(`[share] register failed: ${e.message}`));
+}
 
 function startDaemon(log = console.log) {
   stopDaemon();
@@ -492,6 +604,7 @@ function startDaemon(log = console.log) {
   }
   const interval = Math.max(5000, cfg.intervalMs || DEFAULT_INTERVAL_MS);
   log(`[share] daemon start, interval=${interval}ms, peer=${cfg.peerUrl}`);
+  _registerSelfToMaster(cfg, log);
   const tick = () => {
     syncOnce((m) => log(`[share] ${m}`)).catch((e) => log(`[share] error: ${e.message}`));
   };
@@ -522,4 +635,8 @@ module.exports = {
   startDaemon,
   stopDaemon,
   isRunning,
+  registerFollower,
+  listFollowers,
+  notifyChange,
+  _broadcastToFollowers,
 };
