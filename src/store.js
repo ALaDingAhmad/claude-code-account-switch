@@ -290,19 +290,7 @@ class AccountStore {
     const oauth = extractOauth(live);
     if (!oauth || !oauth.accessToken || !oauth.refreshToken) return;
 
-    // v3.12.0 switchOauth 写 live 时故意把 expiresAt 设为 Date.now()-1000
-    // 逼 Claude Code refresh。在 Claude Code 完成 refresh 之前如果走到这里，
-    // live 里的 expiresAt 是假的过期值、token 和 snapshot 一样。
-    // 如果原样写回 snapshot，会污染 snapshot 的 expiresAt → hash 变化 →
-    // share sync 方向判断用降级后的 expiresAt → 方向反转 → 不同步。
-    // 修复：写 snapshot 前把假 expiresAt 还原为 config 里的真值。
     const snapData = JSON.parse(JSON.stringify(live));
-    const liveExp = snapData.claudeAiOauth?.expiresAt;
-    if (snapData.claudeAiOauth && cur.expiresAt
-        && snapData.claudeAiOauth.expiresAt < cur.expiresAt) {
-      snapData.claudeAiOauth.expiresAt = cur.expiresAt;
-      console.log(`[store] _syncActiveSnapshot "${active}": live expiresAt=${liveExp} < config=${cur.expiresAt}, restored to config value (v3.12.0 fake expiry)`);
-    }
 
     const snapPath = credentialsSnapshotPath(active);
     const newContent = JSON.stringify(snapData);
@@ -335,8 +323,28 @@ class AccountStore {
       cur.accountUuid = liveState.oauthAccount.accountUuid || cur.accountUuid;
     }
     if (liveState.userID) cur.userID = liveState.userID;
+
+    // 从共享缓存读 active 账号的 resets_at，写入 config 供 share sync 方向判断
+    try {
+      if (oauth.accessToken && fileExists(SHARED_CACHE_PATH)) {
+        const hash = crypto.createHash('md5').update(oauth.accessToken).digest('hex').slice(0, 8);
+        const cache = readJson(SHARED_CACHE_PATH);
+        const entry = cache[`${hash}:${USAGE_URL}`];
+        if (entry && entry.code === 200 && entry.body_hex) {
+          const body = JSON.parse(Buffer.from(entry.body_hex, 'hex').toString('utf8'));
+          const ra = body.five_hour?.resets_at;
+          if (ra) {
+            const raMs = new Date(ra).getTime();
+            if (raMs && (!cur.resetsAt || raMs > cur.resetsAt)) {
+              cur.resetsAt = raMs;
+            }
+          }
+        }
+      }
+    } catch { /* 共享缓存不可用不影响核心同步 */ }
+
     cur.updatedAt = new Date().toISOString();
-    console.log(`[store] _syncActiveSnapshot "${active}": snapshot updated, expiresAt ${prevExp||'-'} → ${cur.expiresAt||'-'}, token=${cur.accessTokenMasked}`);
+    console.log(`[store] _syncActiveSnapshot "${active}": snapshot updated, expiresAt ${prevExp||'-'} → ${cur.expiresAt||'-'}, resetsAt=${cur.resetsAt||'-'}, token=${cur.accessTokenMasked}`);
     return true;
   }
 

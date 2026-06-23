@@ -184,6 +184,7 @@ function localSnapshot() {
       createdAt: acct.createdAt || acct.importedAt || null,
       updatedAt: acct.updatedAt || null,
       expiresAt: acct.expiresAt || null,
+      resetsAt: acct.resetsAt || null,
       hash: hashAccount(acct, name),
     };
   }
@@ -233,6 +234,7 @@ function localAccountDetail(name) {
     subscriptionType: acct.subscriptionType,
     scopes: acct.scopes,
     expiresAt: acct.expiresAt,
+    resetsAt: acct.resetsAt || null,
     emailAddress: acct.emailAddress,
     displayName: acct.displayName,
     organizationName: acct.organizationName,
@@ -298,6 +300,7 @@ function applyAccountDetail(detail) {
       subscriptionType: detail.subscriptionType,
       scopes: detail.scopes,
       expiresAt: detail.expiresAt,
+      resetsAt: detail.resetsAt || null,
       emailAddress: detail.emailAddress,
       displayName: detail.displayName,
       organizationName: detail.organizationName,
@@ -310,20 +313,15 @@ function applyAccountDetail(detail) {
   }
   saveConfig(config);
 
-  // 如果被更新的是当前 active 账号，刷新 live（让 OAuth 自动续期/API Key 切换在本端生效）。
-  // 但只在快照内容真正变化时才刷新——否则每轮 sync 都无条件 switchAccount 会触发
-  // _refreshLivePlanInBackground，导致每 30s 一次无意义的 profile API 调用。
+  // Do not call switchAccount() from sync. When two nodes both have this account
+  // active, that would make both sides refresh OAuth tokens and invalidate each
+  // other in a loop. The snapshot is updated; live credentials change only on an
+  // explicit local switch/login.
   const after = readConfig();
   if (after.activeAccount === name && snapshotChanged) {
-    console.log(`[share] applyAccountDetail "${name}" is active + snapshot changed → refreshing live`);
-    try {
-      const Store = require('./store');
-      new Store().switchAccount(name, { notify: false });
-    } catch (e) {
-      console.log(`[share] applied "${name}" but failed to refresh live: ${e.message}`);
-    }
+    console.log(`[share] applyAccountDetail "${name}" is active + snapshot changed; live refresh deferred`);
   } else if (after.activeAccount === name) {
-    console.log(`[share] applyAccountDetail "${name}" is active but snapshot unchanged → skip live refresh`);
+    console.log(`[share] applyAccountDetail "${name}" is active but snapshot unchanged`);
   }
   return { applied: true };
 }
@@ -355,8 +353,8 @@ async function syncOnce(log = () => {}) {
   for (const name of new Set([...Object.keys(local.accounts), ...Object.keys(peer.accounts || {})])) {
     const la = local.accounts[name];
     const pa = (peer.accounts || {})[name];
-    const lInfo = la ? `type=${la.type||'oauth'} hash=${la.hash} expiresAt=${la.expiresAt||'-'} updatedAt=${la.updatedAt||'-'}` : 'absent';
-    const pInfo = pa ? `type=${pa.type||'oauth'} hash=${pa.hash} expiresAt=${pa.expiresAt||'-'} updatedAt=${pa.updatedAt||'-'}` : 'absent';
+    const lInfo = la ? `type=${la.type||'oauth'} hash=${la.hash} expiresAt=${la.expiresAt||'-'} resetsAt=${la.resetsAt||'-'} updatedAt=${la.updatedAt||'-'}` : 'absent';
+    const pInfo = pa ? `type=${pa.type||'oauth'} hash=${pa.hash} expiresAt=${pa.expiresAt||'-'} resetsAt=${pa.resetsAt||'-'} updatedAt=${pa.updatedAt||'-'}` : 'absent';
     log(`  account "${name}": local=[${lInfo}] peer=[${pInfo}]`);
   }
   let pulled = 0;
@@ -385,13 +383,24 @@ async function syncOnce(log = () => {}) {
       const isOauth = (la.type || pa.type) === 'oauth' || (!la.type && !pa.type);
       let localVer, peerVer, label;
       if (isOauth) {
-        // OAuth 直接用 expiresAt（token refresh 后单调递增）判方向。
-        // 不依赖 hash：hash 基于 snapshot 文件内容，会被 v3.12.0 故意过期
-        // 的 expiresAt 差异干扰，导致 hash 不同但 token 实际相同。
-        localVer = la.expiresAt || 0;
-        peerVer = pa.expiresAt || 0;
-        label = 'expiresAt';
-        if (localVer === peerVer) continue;
+        // OAuth 用 expiresAt（~8h token 有效期）+ resetsAt（~5h 用量窗口）判方向。
+        // 取两者中较大的作为版本号：8h 内 token 不变但用量刷新时 resetsAt 会前进。
+        const localExp = la.expiresAt || 0;
+        const peerExp = pa.expiresAt || 0;
+        const localReset = la.resetsAt || 0;
+        const peerReset = pa.resetsAt || 0;
+        const localMax = Math.max(localExp, localReset);
+        const peerMax = Math.max(peerExp, peerReset);
+        if (localMax !== peerMax) {
+          localVer = localMax;
+          peerVer = peerMax;
+          label = localExp !== peerExp ? 'expiresAt' : 'resetsAt';
+        } else {
+          if (la.hash === pa.hash) continue;
+          localVer = new Date(la.updatedAt || 0).getTime();
+          peerVer = new Date(pa.updatedAt || 0).getTime();
+          label = 'updatedAt/hash';
+        }
       } else {
         if (la.hash === pa.hash) continue;
         localVer = new Date(la.updatedAt || 0).getTime();
